@@ -12,6 +12,7 @@
     "@truffle/hdwallet-provider": "^1.7.0",
     "node-telegram-bot-api": "^0.54.0",
     "retus": "^1.1.2",
+    "web3": "^1.6.1",
     "web3-eth-contract": "^1.6.1"
   }
 }

@@ -1,10 +1,15 @@
 let Contract = require('web3-eth-contract');
+let Web3 = require('web3');
+
 const fs = require('fs');
 const retus = require("retus");
 const HDWalletProvider = require("@truffle/hdwallet-provider")
 const TelegramBot = require('node-telegram-bot-api');
+const utils = require("./utils")
 
-Contract.setProvider(new HDWalletProvider(process.env.BOT_MNEMONIC, "wss://api.avax.network/ext/bc/C/ws"));
+let provider = new HDWalletProvider(process.env.BOT_MNEMONIC, "wss://api.avax.network/ext/bc/C/ws")
+Contract.setProvider(provider);
+let web3 = new Web3(provider);
 
 // Init contract
 let IdleGameContract = "0x82a85407BD612f52577909F4A58bfC6873f14DA8"
@@ -13,16 +18,45 @@ var contract = new Contract(JSON.parse(fs.readFileSync('./crabadaabi.json', 'utf
 
 const TelegramChatID = -733729902
 const POLL_URL = "https://idle-api.crabada.com/public/idle/mines?page=1&status=open&looter_address=" + WalletAddress + "&can_loot=1&limit=8"
+const LOOTS_URL = "https://idle-api.crabada.com/public/idle/mines?looter_address=" + WalletAddress + "&page=1&status=open&limit=8"
 
 // init telegram bot
 let bot = new TelegramBot("", { polling: true })
 bot.sendMessage(TelegramChatID, 'Active');
 
 bot.on('message', (msg) => {
-    console.log(msg)
     const chatId = msg.chat.id;
     if (msg.text == "/ping") {
         bot.sendMessage(chatId, 'pong!');
+    } else if (msg.text == "/loots") {
+        sendActiveLoots()
+    }
+});
+bot.on("polling_error", console.log);
+bot.onText(/\/settle (.+)/, (msg, match) => {
+    const chatId = msg.chat.id;
+    const resp = match[1];
+    if (isNaN(resp)) {
+        bot.sendMessage(chatId, "Idiot");
+    } else {
+        settleGame(resp)
+    }
+});
+
+bot.onText(/\/attack (.+)/, (msg, match) => {
+    const chatId = msg.chat.id;
+    const resp = match[1];
+    if (isNaN(resp)) {
+        bot.sendMessage(chatId, "Idiot");
+    } else {
+        for(i = 0; i < teams.length; i++) {
+            if (teams[i].ID == Number(resp)) {
+                pollGamesAndAttack(teams[i])
+                return
+            }
+        }
+
+        bot.sendMessage(chatId, "Team was not found with id: "+ resp);
     }
 });
 
@@ -30,15 +64,19 @@ bot.on('message', (msg) => {
 let teams = []
 teams.push({ ID: 1, Strength: 648 })
 teams.push({ ID: 2, Strength: 673 })
+teams.push({ ID: 3, Strength: 666 })
 
 var lastPollTime = 0
 async function pollGamesAndAttack(team) {
-    while (true) {
+    attackSuccessful = false
+    while (!attackSuccessful) {
         try {
-            console.log("Polling active games for", team.ID)
+            console.log("Polling active games for", team.ID, "strength:", team.Strength)
             res = await retus(POLL_URL)
-            var pollTime = currentTimeSeconds()
+            var pollTime = utils.currentTimeSeconds()
             activeGamesResult = JSON.parse(res.body)
+
+            activeLoots = await makeRequest(LOOTS_URL)
 
             if (activeGamesResult.error_code) {
                 console.log("error retrieving active games, code: " + activeGamesResult.error_code + " message: " + activeGamesResult.message)
@@ -49,11 +87,7 @@ async function pollGamesAndAttack(team) {
                 for (i = 0; i < activeGames.length; i++) {
                     let game = activeGames[i]
 
-                    if (currentTimeSeconds() - game.start_time > 30) {
-                        continue
-                    }
-
-                    if (game.start_time < lastPollTime && lastPollTime != 0) {
+                    if (utils.currentTimeSeconds() - game.start_time > 30) {
                         continue
                     }
 
@@ -62,7 +96,6 @@ async function pollGamesAndAttack(team) {
 
                     if (opponentStrength < team.Strength) {
 
-                        attackSuccessful = false
                         await attack(game, team).then(res => {
                             attackSuccessful = res
                         })
@@ -82,8 +115,11 @@ async function pollGamesAndAttack(team) {
             console.log("error fetching games:" + error)
         }
 
-        sleep(0.1)
+        // Redundant sleep cos why not?
+        utils.sleep(0.1)
     }
+
+    console.log("Poll function exiting")
 }
 
 async function attack(game, team) {
@@ -92,7 +128,7 @@ async function attack(game, team) {
     console.log("Attacking:", gameID, "using team:", team.ID)
 
     var attackError, txHash
-    await contract.methods.attack(gameID, team.ID).send({ from: WalletAddress }, function (err, res) {
+    await contract.methods.attack(gameID, team.ID).send({ from: WalletAddress, gasPrice: 80000000000, }, function (err, res) {
         if (err) {
             console.log("Error sending attack tx:", err)
         } else {
@@ -121,22 +157,91 @@ function prepareTeamForNextAttack(gameID, team, txHash) {
 
     setTimeout(() => {
         bot.sendMessage(TelegramChatID, 'Game #' + gameID + " is ready to be settled.");
-    }, 2100 * 1000);
+    }, 3700 * 1000);
 }
 
-function sleep(seconds) {
-    var e = new Date().getTime() + (seconds * 1000);
-    while (new Date().getTime() <= e) { }
-}
+async function sendActiveLoots() {
+    console.log("Fetching active loots")
+    try {
 
-function currentTimeSeconds() {
-    return new Date().getTime() / 1000
-}
+        let activeLootsResult = await makeRequest(LOOTS_URL)
+        activeLoots = activeLootsResult.data
+        if (activeLoots.length > 0) {
+            console.log("Fetched " + activeLootsResult.totalRecord + " active loots")
 
-async function main(){
-    for(i = 0; i < teams.length; i++) {
-        await pollGamesAndAttack(teams[i])
+            var sb = "Active loots 💰🤑💰\n------------------------------\n"
+            sb += "Game\t\tTeam\t\tReady to settle\n"
+            for (i = 0; i < activeLoots.length; i++) {
+                let loot = activeLoots[i]
+                let ready = utils.currentTimeSeconds() - loot.start_time < 3700 ? "❌" : "✅"
+                sb += loot.game_id + "\t\t" + loot.attack_team_id + "\t\t" + ready + "\n"
+            }
+
+            bot.sendMessage(TelegramChatID, sb);
+        } else {
+            bot.sendMessage(TelegramChatID, "No active loots.");
+            console.log("No active loots")
+        }
+    } catch (err) {
+        console.log(err)
     }
 }
 
-main()
+async function findMyLootTeam(gameID) {
+    let game = await makeRequest("https://idle-api.crabada.com/public/idle/mine/" + gameID)
+
+    if (game.attack_team_owner.toLowerCase() == WalletAddress.toLowerCase()) {
+        return { ID: game.attack_team_id, Strength: game.attack_point }
+    }
+
+    throw Error("Team not found for game: " + gameID)
+}
+
+async function makeRequest(url) {
+    res = await retus(url)
+
+    result = JSON.parse(res.body)
+
+    if (result.error_code) {
+        throw Error("error making request, code: " + result.error_code + " message: " + result.message)
+    }
+
+    return result.result
+}
+
+async function settleGame(gameID) {
+    console.log("Settling:", gameID)
+
+    try {
+
+        let team = await findMyLootTeam(gameID)
+
+        var settleError, txHash
+        await contract.methods.settleGame(gameID).send({ from: WalletAddress }, function (err, res) {
+            if (err) {
+                console.log("Error sending attack tx:", err)
+            } else {
+                console.log("Game #" + gameID + " Team #"+team.ID+" settled successful: " + res)
+                txHash = res
+            }
+        }).on("receipt", function (receipt) {
+            console.log("Settle receipt:", receipt)
+        }).on("error", function (error) {
+            settleError = error
+        })
+
+        if (settleError) {
+            console.log("settle error:", settleError)
+            bot.sendMessage(TelegramChatID, "@x442200 settle error: " + settleError);
+            return false
+        }
+
+        bot.sendMessage(TelegramChatID, "Game #" + gameID+ " Team #"+team.ID+" has been settled.\nhttps://snowtrace.io/tx/" + txHash);
+
+        //attempt another game
+        pollGamesAndAttack(team)
+    } catch (error) {
+        console.log(error)
+        bot.sendMessage(TelegramChatID, "Error restarting game:" + err);
+    }
+}
