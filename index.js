@@ -49,6 +49,8 @@ bot.onText(/\/attack (.+)/, (msg, match) => {
     if (isNaN(resp)) {
         bot.sendMessage(chatId, "Idiot");
     } else {
+        bot.sendMessage(chatId, "Attacking");
+        console.log("Received attack message")
         for(i = 0; i < teams.length; i++) {
             if (teams[i].ID == Number(resp)) {
                 pollGamesAndAttack(teams[i])
@@ -128,7 +130,7 @@ async function attack(game, team) {
     console.log("Attacking:", gameID, "using team:", team.ID)
 
     var attackError, txHash
-    await contract.methods.attack(gameID, team.ID).send({ from: WalletAddress, gasPrice: 80000000000, }, function (err, res) {
+    await contract.methods.attack(gameID, team.ID).send({ from: WalletAddress}, function (err, res) {
         if (err) {
             console.log("Error sending attack tx:", err)
         } else {
