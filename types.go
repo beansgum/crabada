@@ -7,8 +7,8 @@ type TeamsResponse struct {
 }
 
 type TeamResult struct {
-	TotalRecord int    `json:"totalRecord"`
-	Teams       []Team `json:"data"`
+	TotalRecord int     `json:"totalRecord"`
+	Teams       []*Team `json:"data"`
 }
 
 type Team struct {

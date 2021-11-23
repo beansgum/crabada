@@ -27,8 +27,10 @@ const (
 
 	TelegramChatID = 0
 
+	TeamAvailable = "AVAILABLE"
+
 	POLL_URL  = "https://idle-api.crabada.com/public/idle/mines?page=1&status=open&looter_address=0xed3428bcc71d3b0a43bb50a64ed774bec57100a8&can_loot=1&limit=8"
-	LOOT_URL  = "https://idle-api.crabada.com/public/idle/mines?looter_address=0xed3428bcc71d3b0a43bb50a64ed774bec57100a8&page=1&status=open&limit=8"
+	LOOT_URL  = "https://idle-api.crabada.com/public/idle/mines?looter_address=%s&page=1&status=open&limit=8"
 	TEAMS_URL = "https://idle-api.crabada.com/public/idle/teams?user_address=%s"
 )
 
@@ -113,8 +115,14 @@ func (et *etubot) start() {
 		case m.Text == "/ping":
 			b.Reply(m, "pong!")
 			return
+		case m.Text == "/gas":
+			go et.gas(m)
+			return
+		case m.Text == "/raid":
+			go et.raid()
+			return
 		case m.Text == "/loots":
-			go et.sendActiveLoots()
+			go et.sendActiveLoots(m)
 			return
 		case m.Text == "/teams":
 			go et.sendTeams(m)
@@ -150,7 +158,6 @@ func (et *etubot) start() {
 				b.Reply(m, fmt.Sprintf("Attacking using team #%d", team.ID))
 			}()
 		}
-
 	})
 
 	fmt.Println()
@@ -160,8 +167,35 @@ func (et *etubot) start() {
 	b.Start()
 }
 
-func (et *etubot) raid(){
-	
+func (et *etubot) gas(msg *tb.Message) {
+	gasPrice, err := et.client.SuggestGasPrice(context.Background())
+	if err != nil {
+		et.sendError(fmt.Errorf("error finding gas fee:%v", err))
+		return
+	}
+
+	et.bot.Reply(msg, fmt.Sprintf("%d gwei", big.NewInt(0).Div(gasPrice, big.NewInt(1e9))))
+}
+
+func (et *etubot) raid() {
+	teams, err := et.allTeams()
+	if err != nil {
+		et.sendError(fmt.Errorf("error finding teams team:%v", err))
+		return
+	}
+
+	queue := 0
+	for _, team := range teams {
+		if team.Status == TeamAvailable {
+			queue++
+			et.attackCh <- team
+		}
+	}
+	if queue > 0 {
+		et.bot.Send(&TelegramChat, fmt.Sprintf("Queued %d teams for attack.", queue))
+	} else {
+		et.bot.Send(&TelegramChat, "All teams are busy.")
+	}
 }
 
 func (et *etubot) queAttacks() {
@@ -198,7 +232,8 @@ func (et *etubot) pollGamesAndAttack(team *Team) {
 		fmt.Printf("Found %d games\n", response.TotalRecord)
 		var target *Game
 		for _, game := range response.GamesResult.Games {
-			if team.Strength > game.DefensePoint {
+
+			if team.Strength > game.DefensePoint && time.Since(time.Unix(game.StartTime, 0)) < (10*time.Second) {
 				target = &game
 				break
 			}
@@ -209,7 +244,7 @@ func (et *etubot) pollGamesAndAttack(team *Team) {
 			continue
 		}
 
-		fmt.Println("Game:", target.ID, "opponent strength:", target.DefensePoint, "team strength:", team.Strength)
+		fmt.Println("Game:", target.ID, "opponent strength:", target.DefensePoint, "team strength:", team.Strength, "start time:", time.Since(time.Unix(target.StartTime, 0)).Truncate(time.Second))
 
 		err = et.attack(target, team)
 		if err != nil {
@@ -340,11 +375,6 @@ func (et *etubot) txAuth(address string) (*bind.TransactOpts, error) {
 
 	fmt.Println("Current nonce", nonce, address)
 
-	// gasPrice, err := et.client.SuggestGasPrice(context.Background())
-	// if err != nil {
-	// 	return nil, err
-	// }
-
 	auth, err := bind.NewKeyedTransactorWithChainID(et.privateKey[strings.ToLower(address)], big.NewInt(43114))
 	if err != nil {
 		return nil, err
@@ -355,48 +385,53 @@ func (et *etubot) txAuth(address string) (*bind.TransactOpts, error) {
 	auth.GasLimit = uint64(145000) // in units // TODO
 	// auth.GasPrice = big.NewInt(0).Sub(gasPrice, big.NewInt(30000000000)) // add 30 gwei
 
-	auth.GasFeeCap = big.NewInt(100000000000)
+	auth.GasPrice = big.NewInt(80000000000)
 
 	return auth, nil
 }
 
-func (et *etubot) sendActiveLoots() {
-	var response GamesResponse
-	err := makeRequest(LOOT_URL, &response)
-	if err != nil {
-		fmt.Println("Error fetching active loots:", err)
-		return
-	}
+func (et *etubot) sendActiveLoots(msg *tb.Message) {
+	var games []Game
+	for i := 0; i < len(wallets); i++ {
 
-	if response.ErrorCode != "" {
-		fmt.Println("Error polling games code:", response.ErrorCode, "message:"+response.Message)
-		return
-	}
-
-	if response.TotalRecord > 0 {
-		sb := fmt.Sprintf("%d active loots 💰🤑💰\n-------------------------\n", response.TotalRecord)
-
-		et.bot.Send(&TelegramChat, sb)
-		for _, game := range response.GamesResult.Games {
-			tm := time.Unix(game.StartTime, 0)
-
-			settle := tm.Add(time.Duration(1) * time.Hour).Add(time.Duration(5) * time.Minute)
-			lootSummary := "💰 Loot\n"
-			lootSummary += fmt.Sprintf("Game: %d\n", game.ID)
-			lootSummary += fmt.Sprintf("Team: %d\n", game.AttackTeamID)
-			if time.Now().After(settle) {
-				lootSummary += "Ready: yes"
-			} else {
-				lootSummary += fmt.Sprintf("Settle in: %s\n", time.Until(settle))
-			}
-
-			et.bot.Send(&TelegramChat, lootSummary)
+		var response GamesResponse
+		err := makeRequest(fmt.Sprintf(LOOT_URL, wallets[i]), &response)
+		if err != nil {
+			fmt.Println("Error fetching active loots:", err)
+			return
 		}
+
+		if response.ErrorCode != "" {
+			fmt.Println("Error polling games code:", response.ErrorCode, "message:"+response.Message)
+			return
+		}
+
+		games = append(games, response.Games...)
 	}
+
+	sb := fmt.Sprintf("%d active loots 💰🤑💰\n-------------------------\n", len(games))
+	for _, game := range games {
+		tm := time.Unix(game.StartTime, 0)
+
+		settle := tm.Add(time.Duration(1) * time.Hour).Add(time.Duration(5) * time.Minute)
+		lootSummary := "💰 Loot\n"
+		lootSummary += fmt.Sprintf("Game: %d\n", game.ID)
+		lootSummary += fmt.Sprintf("Team: %d\n", game.AttackTeamID)
+		lootSummary += fmt.Sprintf("Account: %s\n", game.AttackTeamOwner[:7])
+		if time.Now().After(settle) {
+			lootSummary += "Ready: yes\n"
+		} else {
+			lootSummary += fmt.Sprintf("Settle in: %s\n", time.Until(settle))
+		}
+
+		sb += "\n" + lootSummary
+	}
+
+	et.bot.Reply(msg, sb)
 }
 
-func (et *etubot) allTeams() ([]Team, error) {
-	var teams []Team
+func (et *etubot) allTeams() ([]*Team, error) {
+	var teams []*Team
 	for i := 0; i < len(wallets); i++ {
 		var response TeamsResponse
 		err := makeRequest(fmt.Sprintf(TEAMS_URL, wallets[i]), &response)
@@ -426,7 +461,7 @@ func (et *etubot) teamForID(teamID int64) (*Team, error) {
 
 	for _, team := range teams {
 		if team.ID == teamID {
-			return &team, nil
+			return team, nil
 		}
 	}
 
