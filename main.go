@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/c-ollins/crabada/idlegame"
@@ -37,7 +36,7 @@ const (
 )
 
 var (
-	TelegramChat   = tb.Chat{ID: TelegramChatID}
+	TelegramChat   = &tb.Chat{ID: TelegramChatID}
 	MsgSendOptions = &tb.SendOptions{DisableWebPagePreview: true}
 
 	settleRegex = regexp.MustCompile(`\/settle (.+)`)
@@ -48,6 +47,7 @@ var (
 
 func main() {
 	et := etubot{
+		isAuto:     true,
 		attackCh:   make(chan *Team, 5),
 		privateKey: make(map[string]*ecdsa.PrivateKey),
 	}
@@ -55,9 +55,8 @@ func main() {
 }
 
 type etubot struct {
-	mu sync.RWMutex
-
-	bot *tb.Bot
+	bot    *tb.Bot
+	isAuto bool
 
 	attackCh chan *Team
 
@@ -127,7 +126,7 @@ func (et *etubot) start() {
 			go et.sendActiveLoots(m)
 			return
 		case m.Text == "/settleall":
-			go et.settleAll(m)
+			go et.settleAll(false)
 			return
 		case m.Text == "/teams":
 			go et.sendTeams(m)
@@ -141,7 +140,7 @@ func (et *etubot) start() {
 				return
 			}
 
-			go et.settleGame(m, int64(gameID))
+			go et.settleGame(int64(gameID))
 		} else if matches := attackRegex.FindStringSubmatch(m.Text); len(matches) > 1 {
 			teamID, err := strconv.Atoi(matches[1])
 			if err != nil {
@@ -158,17 +157,17 @@ func (et *etubot) start() {
 					}
 				}
 
-				fmt.Println("Attacking with theam")
 				et.attackCh <- team
 				b.Reply(m, fmt.Sprintf("Attacking using team #%d", team.ID))
 			}()
 		}
 	})
 
-	fmt.Println()
-
 	log.Info("Bot running")
 	go et.queAttacks()
+	if et.isAuto {
+		go et.auto()
+	}
 	b.Start()
 }
 
@@ -197,9 +196,9 @@ func (et *etubot) raid() {
 		}
 	}
 	if queue > 0 {
-		et.bot.Send(&TelegramChat, fmt.Sprintf("Queued %d teams for attack.", queue))
-	} else {
-		et.bot.Send(&TelegramChat, "All teams are busy.")
+		et.bot.Send(TelegramChat, fmt.Sprintf("Queued %d teams for attack.", queue))
+	} else if !et.isAuto {
+		et.bot.Send(TelegramChat, "All teams are busy.")
 	}
 }
 
@@ -209,8 +208,8 @@ func (et *etubot) queAttacks() {
 
 		if !et.teamIsAvailable(team.ID) {
 			lg := fmt.Sprintf("Cannot attack, team %d is not available", team.ID)
-			fmt.Println(lg)
-			et.bot.Send(&TelegramChat, lg)
+			log.Info(lg)
+			et.bot.Send(TelegramChat, lg)
 			continue
 		}
 
@@ -225,12 +224,12 @@ func (et *etubot) pollGamesAndAttack(team *Team) {
 		var response GamesResponse
 		err := makeRequest(POLL_URL, &response)
 		if err != nil {
-			fmt.Println("Error polling games:", err)
+			log.Error("error polling games:", err)
 			return
 		}
 
 		if response.ErrorCode != "" {
-			fmt.Println("Error polling games code:", response.ErrorCode, "message:"+response.Message)
+			log.Error("Error polling games code: %s, message %s", response.ErrorCode, response.Message)
 			if response.ErrorCode == INTERNAL_SERVER_ERROR {
 				continue
 			}
@@ -238,7 +237,7 @@ func (et *etubot) pollGamesAndAttack(team *Team) {
 			return
 		}
 
-		fmt.Printf("Found %d games\n", response.TotalRecord)
+		log.Infof("Found %d games", response.TotalRecord)
 		var target *Game
 		for _, game := range response.GamesResult.Games {
 
@@ -253,17 +252,17 @@ func (et *etubot) pollGamesAndAttack(team *Team) {
 			continue
 		}
 
-		fmt.Println("Game:", target.ID, "opponent strength:", target.DefensePoint, "team strength:", team.Strength, "start time:", time.Since(time.Unix(target.StartTime, 0)).Truncate(time.Second))
+		log.Infof("Game: %d, opponent strength: %d, team strength: %d, start time:%d", target.ID, target.DefensePoint, team.Strength, time.Since(time.Unix(target.StartTime, 0)).Truncate(time.Second))
 
 		err = et.attack(target, team)
 		if err != nil {
 			errorCount++
 			if errorCount >= 10 {
-				et.bot.Send(&TelegramChat, fmt.Sprintf("More than 10 errors while trying to attack using team %d. %v", team.ID, err))
+				et.bot.Send(TelegramChat, fmt.Sprintf("More than 10 errors while trying to attack using team %d. %v", team.ID, err))
 				return
 			}
 
-			fmt.Println("error attacking:", err)
+			log.Error("error attacking:", err)
 			continue
 		}
 
@@ -274,7 +273,7 @@ func (et *etubot) pollGamesAndAttack(team *Team) {
 func (et *etubot) attack(game *Game, team *Team) error {
 
 	lg := fmt.Sprintf("Attacking %d using %d, strength advantage: %d.", game.ID, team.ID, team.Strength-game.DefensePoint)
-	fmt.Println(lg)
+	log.Info(lg)
 	auth, err := et.txAuth(team.Wallet)
 	if err != nil {
 		return err
@@ -285,39 +284,35 @@ func (et *etubot) attack(game *Game, team *Team) error {
 		return err
 	}
 
-	fmt.Println("Attack tx hash:", tx.Hash())
+	log.Info("Attack tx hash:", tx.Hash())
 	// wait for receipt
 	for {
-		fmt.Println("Checking for receipt")
 		receipt, err := et.client.TransactionReceipt(context.Background(), tx.Hash())
 		if err != nil {
 			if err != ethereum.NotFound {
-				fmt.Println("error:", err)
+				log.Error("error:", err)
 			}
 			time.Sleep(5 * time.Second)
 			continue
 		}
 
-		fmt.Println("Receipt came")
-		fmt.Println(receipt)
+		log.Info(receipt)
 		if receipt.Status == types.ReceiptStatusSuccessful {
-
-			// et.bot.Send(&TelegramChat, lg)
-			et.bot.Send(&TelegramChat, fmt.Sprintf("Game #%d attack successful by team #%d.\nhttps://snowtrace.io/tx/%s", game.ID, team.ID, tx.Hash().String()), MsgSendOptions)
+			et.bot.Send(TelegramChat, fmt.Sprintf("Game #%d attack successful by team #%d.\nhttps://snowtrace.io/tx/%s", game.ID, team.ID, tx.Hash().String()), MsgSendOptions)
 			return nil
 		}
 
-		fmt.Println("Attack failed, retrying")
+		log.Info("Attack failed, retrying")
 		return fmt.Errorf("transaction failed on: %d", game.ID)
 	}
 }
 
 func (et *etubot) sendError(err error) {
 	log.Error(err)
-	et.bot.Send(&TelegramChat, err)
+	et.bot.Send(TelegramChat, err)
 }
 
-func (et *etubot) settleAll(msg *tb.Message) {
+func (et *etubot) settleAll(isAuto bool) {
 	games, err := et.activeLoots()
 	if err != nil {
 		et.sendError(fmt.Errorf("error fetching active loots: %v", err))
@@ -331,18 +326,18 @@ func (et *etubot) settleAll(msg *tb.Message) {
 		settle := tm.Add(time.Duration(1) * time.Hour).Add(time.Duration(5) * time.Minute)
 		if time.Now().After(settle) {
 			totalSettled++
-			et.settleGame(msg, game.ID)
+			et.settleGame(game.ID)
 		}
 	}
 
-	if totalSettled == 0 {
-		et.bot.Reply(msg, "No games ready to be settled.")
+	if totalSettled == 0 && !isAuto {
+		et.bot.Send(TelegramChat, "No games ready to be settled.")
 	}
 }
 
-func (et *etubot) settleGame(msg *tb.Message, gameID int64) {
-	fmt.Println("Settling game", gameID)
-	et.bot.Reply(msg, fmt.Sprintf("Settling game #%d", gameID))
+func (et *etubot) settleGame(gameID int64) {
+	log.Info("Settling game", gameID)
+	et.bot.Send(TelegramChat, fmt.Sprintf("Settling game #%d", gameID))
 	team, err := et.findMyLootTeam(gameID)
 	if err != nil {
 		et.sendError(fmt.Errorf("error finding loot team:%v", err))
@@ -361,20 +356,19 @@ func (et *etubot) settleGame(msg *tb.Message, gameID int64) {
 		return
 	}
 
-	fmt.Println("Settle hash:", tx.Hash())
+	log.Info("Settle hash:", tx.Hash())
 	// wait for receipt
 	for {
-		fmt.Println("Checking for receipt")
-		receipt, err := et.client.TransactionReceipt(context.Background(), tx.Hash())
+		log.Info("Checking for receipt")
+		_, err := et.client.TransactionReceipt(context.Background(), tx.Hash())
 		if err != nil {
 			if err != ethereum.NotFound {
-				fmt.Println("error:", err)
+				log.Error("error:", err)
 			}
 			time.Sleep(5 * time.Second)
 			continue
 		}
-		fmt.Println(receipt.Status, receipt.Logs)
-		et.bot.Reply(msg, fmt.Sprintf("Game #%d Team #%d has been settled.\nhttps://snowtrace.io/tx/%s", gameID, team.ID, tx.Hash().String()), MsgSendOptions)
+		et.bot.Send(TelegramChat, fmt.Sprintf("Game #%d Team #%d has been settled.\nhttps://snowtrace.io/tx/%s", gameID, team.ID, tx.Hash().String()), MsgSendOptions)
 		break
 	}
 }
@@ -401,8 +395,6 @@ func (et *etubot) txAuth(address string) (*bind.TransactOpts, error) {
 		return nil, err
 	}
 
-	fmt.Println("Current nonce", nonce, address)
-
 	auth, err := bind.NewKeyedTransactorWithChainID(et.privateKey[strings.ToLower(address)], big.NewInt(43114))
 	if err != nil {
 		return nil, err
@@ -425,7 +417,7 @@ func (et *etubot) activeLoots() ([]Game, error) {
 		var response GamesResponse
 		err := makeRequest(fmt.Sprintf(LOOT_URL, wallets[i]), &response)
 		if err != nil {
-			fmt.Println("Error fetching active loots:", err)
+			log.Error("Error fetching active loots:", err)
 			return nil, err
 		}
 
@@ -474,7 +466,7 @@ func (et *etubot) allTeams() ([]*Team, error) {
 		var response TeamsResponse
 		err := makeRequest(fmt.Sprintf(TEAMS_URL, wallets[i]), &response)
 		if err != nil {
-			fmt.Println("Error fetching teams:", err)
+			log.Error("Error fetching teams:", err)
 			return nil, err
 		}
 
@@ -539,4 +531,16 @@ func (et *etubot) sendTeams(msg *tb.Message) {
 	}
 
 	et.bot.Reply(msg, sb)
+}
+
+func (et *etubot) auto() {
+	et.bot.Send(TelegramChat, "Etubot running on auto.")
+	for {
+		log.Info("Auto running")
+		// settle ready games
+		et.settleAll(true)
+		et.raid()
+
+		time.Sleep(5 * time.Minute)
+	}
 }
