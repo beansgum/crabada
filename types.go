@@ -1,9 +1,21 @@
 package main
 
+type TeamsResponse struct {
+	ErrorCode  string `json:"error_code"`
+	Message    string `json:"message"`
+	TeamResult `json:"result"`
+}
+
+type TeamResult struct {
+	TotalRecord int    `json:"totalRecord"`
+	Teams       []Team `json:"data"`
+}
+
 type Team struct {
-	ID       int
-	Strength int
-	Wallet   string
+	ID       int    `json:"team_id"`
+	Strength int    `json:"battle_point"`
+	Wallet   string `json:"owner"`
+	Status   string `json:"status"` //AVAILABLE/LOCK
 }
 
 type GamesResponse struct {

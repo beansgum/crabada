@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,8 +26,9 @@ const (
 
 	TelegramChatID = 0
 
-	POLL_URL = "https://idle-api.crabada.com/public/idle/mines?page=1&status=open&looter_address=0xed3428bcc71d3b0a43bb50a64ed774bec57100a8&can_loot=1&limit=8"
-	LOOT_URL = "https://idle-api.crabada.com/public/idle/mines?looter_address=0xed3428bcc71d3b0a43bb50a64ed774bec57100a8&page=1&status=open&limit=8"
+	POLL_URL  = "https://idle-api.crabada.com/public/idle/mines?page=1&status=open&looter_address=0xed3428bcc71d3b0a43bb50a64ed774bec57100a8&can_loot=1&limit=8"
+	LOOT_URL  = "https://idle-api.crabada.com/public/idle/mines?looter_address=0xed3428bcc71d3b0a43bb50a64ed774bec57100a8&page=1&status=open&limit=8"
+	TEAMS_URL = "https://idle-api.crabada.com/public/idle/teams?user_address=%s"
 )
 
 var (
@@ -34,6 +36,8 @@ var (
 	MsgSendOptions = &tb.SendOptions{DisableWebPagePreview: true}
 
 	settleRegex = regexp.MustCompile(`\/settle (.+)`)
+
+	wallets = []string{"0xed3428BcC71d3B0a43Bb50a64ed774bEc57100a8", "0xf91fF01b9EF0d83D0bBd89953d53504f099A3DFf"}
 )
 
 func main() {
@@ -104,7 +108,9 @@ func (et *etubot) start() {
 		case m.Text == "/loots":
 			go et.sendActiveLoots()
 			return
-
+		case m.Text == "/teams":
+			go et.sendTeams(m)
+			return
 		}
 
 		if matches := settleRegex.FindStringSubmatch(m.Text); len(matches) > 1 {
@@ -244,7 +250,7 @@ func (et *etubot) sendActiveLoots() {
 	var response GamesResponse
 	err := makeRequest(LOOT_URL, &response)
 	if err != nil {
-		fmt.Println("Error polling games:", err)
+		fmt.Println("Error fetching active loots:", err)
 		return
 	}
 
@@ -273,4 +279,67 @@ func (et *etubot) sendActiveLoots() {
 			et.bot.Send(&TelegramChat, lootSummary)
 		}
 	}
+}
+
+func (et *etubot) allTeams() ([]Team, error) {
+	var teams []Team
+	for i := 0; i < len(wallets); i++ {
+		var response TeamsResponse
+		err := makeRequest(fmt.Sprintf(TEAMS_URL, wallets[i]), &response)
+		if err != nil {
+			fmt.Println("Error fetching teams:", err)
+			return nil, err
+		}
+
+		if response.ErrorCode != "" {
+			fmt.Println("Error fetching teams code:", response.ErrorCode, "message:"+response.Message)
+			return nil, err
+		}
+
+		if response.TotalRecord > 0 {
+			teams = append(teams, response.Teams...)
+		}
+	}
+
+	return teams, nil
+}
+
+func (et *etubot) teamIsAvailable(teamID int) bool {
+	teams, err := et.allTeams()
+	if err != nil {
+		et.sendError(fmt.Errorf("error fetching teams: %v", err))
+		return false
+	}
+
+	for _, team := range teams {
+		if team.ID == teamID {
+			if team.Status == "AVAILABLE" {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func (et *etubot) sendTeams(msg *tb.Message) {
+
+	teams, err := et.allTeams()
+	if err != nil {
+		et.sendError(fmt.Errorf("error fetching teams: %v", err))
+		return
+	}
+
+	sb := fmt.Sprintf("%d teams\n---------------------\n", len(teams))
+
+	for _, team := range teams {
+		teamSummary := fmt.Sprintf("ID: %d\n", team.ID)
+		teamSummary += fmt.Sprintf("Strength: %d\n", team.Strength)
+		teamSummary += fmt.Sprintf("Account: %s\n", team.Wallet[:7])
+		teamSummary += fmt.Sprintf("Status: %s\n", strings.ToLower(team.Status))
+
+		sb += "\n" + teamSummary
+	}
+
+	et.bot.Reply(msg, sb)
 }
