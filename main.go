@@ -23,6 +23,8 @@ import (
 )
 
 const (
+	INTERNAL_SERVER_ERROR = "INTERNAL_SERVER_ERROR"
+
 	IdleContractAddress = "0x82a85407BD612f52577909F4A58bfC6873f14DA8"
 
 	TelegramChatID = 0
@@ -123,6 +125,9 @@ func (et *etubot) start() {
 			return
 		case m.Text == "/loots":
 			go et.sendActiveLoots(m)
+			return
+		case m.Text == "/settleall":
+			go et.settleAll(m)
 			return
 		case m.Text == "/teams":
 			go et.sendTeams(m)
@@ -226,6 +231,10 @@ func (et *etubot) pollGamesAndAttack(team *Team) {
 
 		if response.ErrorCode != "" {
 			fmt.Println("Error polling games code:", response.ErrorCode, "message:"+response.Message)
+			if response.ErrorCode == INTERNAL_SERVER_ERROR {
+				continue
+			}
+
 			return
 		}
 
@@ -308,6 +317,29 @@ func (et *etubot) sendError(err error) {
 	et.bot.Send(&TelegramChat, err)
 }
 
+func (et *etubot) settleAll(msg *tb.Message) {
+	games, err := et.activeLoots()
+	if err != nil {
+		et.sendError(fmt.Errorf("error fetching active loots: %v", err))
+		return
+	}
+
+	totalSettled := 0
+
+	for _, game := range games {
+		tm := time.Unix(game.StartTime, 0)
+		settle := tm.Add(time.Duration(1) * time.Hour).Add(time.Duration(5) * time.Minute)
+		if time.Now().After(settle) {
+			totalSettled++
+			et.settleGame(msg, game.ID)
+		}
+	}
+
+	if totalSettled == 0 {
+		et.bot.Reply(msg, "No games ready to be settled.")
+	}
+}
+
 func (et *etubot) settleGame(msg *tb.Message, gameID int64) {
 	fmt.Println("Settling game", gameID)
 	et.bot.Reply(msg, fmt.Sprintf("Settling game #%d", gameID))
@@ -317,7 +349,6 @@ func (et *etubot) settleGame(msg *tb.Message, gameID int64) {
 		return
 	}
 
-	fmt.Println("Team wallet:", team.Wallet)
 	auth, err := et.txAuth(team.Wallet)
 	if err != nil {
 		et.sendError(fmt.Errorf("error creating tx auth: %v", err))
@@ -332,23 +363,20 @@ func (et *etubot) settleGame(msg *tb.Message, gameID int64) {
 
 	fmt.Println("Settle hash:", tx.Hash())
 	// wait for receipt
-	go func() {
-		for {
-			fmt.Println("Checking for receipt")
-			receipt, err := et.client.TransactionReceipt(context.Background(), tx.Hash())
-			if err != nil {
-				if err != ethereum.NotFound {
-					fmt.Println("error:", err)
-				}
-				time.Sleep(5 * time.Second)
-				continue
+	for {
+		fmt.Println("Checking for receipt")
+		receipt, err := et.client.TransactionReceipt(context.Background(), tx.Hash())
+		if err != nil {
+			if err != ethereum.NotFound {
+				fmt.Println("error:", err)
 			}
-			fmt.Println("Receipt came")
-			fmt.Println(receipt.Status, receipt.Logs)
-			et.bot.Reply(msg, fmt.Sprintf("Game #%d Team #%d has been settled.\nhttps://snowtrace.io/tx/%s", gameID, team.ID, tx.Hash().String()), MsgSendOptions)
-			break
+			time.Sleep(5 * time.Second)
+			continue
 		}
-	}()
+		fmt.Println(receipt.Status, receipt.Logs)
+		et.bot.Reply(msg, fmt.Sprintf("Game #%d Team #%d has been settled.\nhttps://snowtrace.io/tx/%s", gameID, team.ID, tx.Hash().String()), MsgSendOptions)
+		break
+	}
 }
 
 func (et *etubot) findMyLootTeam(gameID int64) (*Team, error) {
@@ -382,7 +410,7 @@ func (et *etubot) txAuth(address string) (*bind.TransactOpts, error) {
 
 	auth.Nonce = big.NewInt(int64(nonce))
 	auth.Value = big.NewInt(0)     // in wei
-	auth.GasLimit = uint64(145000) // in units // TODO
+	auth.GasLimit = uint64(200000) // in units // TODO
 	// auth.GasPrice = big.NewInt(0).Sub(gasPrice, big.NewInt(30000000000)) // add 30 gwei
 
 	auth.GasPrice = big.NewInt(80000000000)
@@ -390,7 +418,7 @@ func (et *etubot) txAuth(address string) (*bind.TransactOpts, error) {
 	return auth, nil
 }
 
-func (et *etubot) sendActiveLoots(msg *tb.Message) {
+func (et *etubot) activeLoots() ([]Game, error) {
 	var games []Game
 	for i := 0; i < len(wallets); i++ {
 
@@ -398,15 +426,25 @@ func (et *etubot) sendActiveLoots(msg *tb.Message) {
 		err := makeRequest(fmt.Sprintf(LOOT_URL, wallets[i]), &response)
 		if err != nil {
 			fmt.Println("Error fetching active loots:", err)
-			return
+			return nil, err
 		}
 
 		if response.ErrorCode != "" {
-			fmt.Println("Error polling games code:", response.ErrorCode, "message:"+response.Message)
-			return
+			return nil, fmt.Errorf("error fetching game by id: %s, message: %s", response.ErrorCode, response.Message)
 		}
 
 		games = append(games, response.Games...)
+	}
+
+	return games, nil
+}
+
+func (et *etubot) sendActiveLoots(msg *tb.Message) {
+
+	games, err := et.activeLoots()
+	if err != nil {
+		et.sendError(fmt.Errorf("error fetching active loots: %v", err))
+		return
 	}
 
 	sb := fmt.Sprintf("%d active loots 💰🤑💰\n-------------------------\n", len(games))
@@ -421,7 +459,7 @@ func (et *etubot) sendActiveLoots(msg *tb.Message) {
 		if time.Now().After(settle) {
 			lootSummary += "Ready: yes\n"
 		} else {
-			lootSummary += fmt.Sprintf("Settle in: %s\n", time.Until(settle))
+			lootSummary += fmt.Sprintf("Settle in: %s\n", settle.Sub(time.Now()))
 		}
 
 		sb += "\n" + lootSummary
@@ -441,8 +479,7 @@ func (et *etubot) allTeams() ([]*Team, error) {
 		}
 
 		if response.ErrorCode != "" {
-			fmt.Println("Error fetching teams code:", response.ErrorCode, "message:"+response.Message)
-			return nil, err
+			return nil, fmt.Errorf("error fetching game by id: %s, message: %s", response.ErrorCode, response.Message)
 		}
 
 		if response.TotalRecord > 0 {
