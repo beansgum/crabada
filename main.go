@@ -16,6 +16,7 @@ import (
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
 	tb "gopkg.in/tucnak/telebot.v2"
@@ -36,12 +37,16 @@ var (
 	MsgSendOptions = &tb.SendOptions{DisableWebPagePreview: true}
 
 	settleRegex = regexp.MustCompile(`\/settle (.+)`)
+	attackRegex = regexp.MustCompile(`\/attack (.+)`)
 
 	wallets = []string{"0xed3428BcC71d3B0a43Bb50a64ed774bEc57100a8", "0xf91fF01b9EF0d83D0bBd89953d53504f099A3DFf"}
 )
 
 func main() {
-	et := etubot{}
+	et := etubot{
+		attackCh:   make(chan *Team, 5),
+		privateKey: make(map[string]*ecdsa.PrivateKey),
+	}
 	et.start()
 }
 
@@ -50,9 +55,11 @@ type etubot struct {
 
 	bot *tb.Bot
 
+	attackCh chan *Team
+
 	client       *ethclient.Client
 	idleContract *idlegame.Idlegame
-	privateKey   *ecdsa.PrivateKey
+	privateKey   map[string]*ecdsa.PrivateKey
 }
 
 func (et *etubot) start() {
@@ -64,7 +71,14 @@ func (et *etubot) start() {
 		log.Error(err)
 		return
 	}
-	et.privateKey = privateKey
+	et.privateKey[strings.ToLower("0xed3428BcC71d3B0a43Bb50a64ed774bEc57100a8")] = privateKey
+
+	privateKey2, err := crypto.HexToECDSA(os.Getenv("BOT_PRIVATE2"))
+	if err != nil {
+		log.Error(err)
+		return
+	}
+	et.privateKey[strings.ToLower("0xf91fF01b9EF0d83D0bBd89953d53504f099A3DFf")] = privateKey2
 
 	client, err := ethclient.Dial("wss://api.avax.network/ext/bc/C/ws")
 	if err != nil {
@@ -72,12 +86,6 @@ func (et *etubot) start() {
 		return
 	}
 	et.client = client
-
-	// gasPrice, err := client.SuggestGasPrice(context.Background())
-	// if err != nil {
-	// 	log.Error(err)
-	// 	return
-	// }
 
 	log.Info("Connected to infura")
 
@@ -121,6 +129,26 @@ func (et *etubot) start() {
 			}
 
 			go et.settleGame(m, int64(gameID))
+		} else if matches := attackRegex.FindStringSubmatch(m.Text); len(matches) > 1 {
+			teamID, err := strconv.Atoi(matches[1])
+			if err != nil {
+				b.Reply(m, err.Error())
+				return
+			}
+
+			go func() {
+				team, err := et.teamForID(int64(teamID))
+				if err != nil {
+					if err != nil {
+						b.Reply(m, fmt.Sprintf("Could not find team:%v", err))
+						return
+					}
+				}
+
+				fmt.Println("Attacking with theam")
+				et.attackCh <- team
+				b.Reply(m, fmt.Sprintf("Attacking using team #%d", team.ID))
+			}()
 		}
 
 	})
@@ -128,37 +156,116 @@ func (et *etubot) start() {
 	fmt.Println()
 
 	log.Info("Bot running")
-	// et.pollGamesAndAttack(nil)
+	go et.queAttacks()
 	b.Start()
 }
 
-func (et *etubot) pollGamesAndAttack(team *Team) {
-	// fmt.Printf("Polling active games for  team #%d strength: %d", team.ID, team.Strength)
-	var response GamesResponse
-	err := makeRequest(POLL_URL, &response)
-	if err != nil {
-		fmt.Println("Error polling games:", err)
-		return
-	}
+func (et *etubot) raid(){
+	
+}
 
-	if response.ErrorCode != "" {
-		fmt.Println("Error polling games code:", response.ErrorCode, "message:"+response.Message)
-		return
-	}
+func (et *etubot) queAttacks() {
+	log.Info("Attacks queue active")
+	for team := range et.attackCh {
 
-	fmt.Printf("Found %d games\n", response.TotalRecord)
-	if response.TotalRecord > 0 {
-		for _, game := range response.GamesResult.Games {
-			fmt.Println("Game:", game.ID, "opponent strength:", game.DefensePoint, "team strength:", team.Strength)
-			if team.Strength > game.DefensePoint {
-
-			}
+		if !et.teamIsAvailable(team.ID) {
+			lg := fmt.Sprintf("Cannot attack, team %d is not available", team.ID)
+			fmt.Println(lg)
+			et.bot.Send(&TelegramChat, lg)
+			continue
 		}
+
+		et.pollGamesAndAttack(team)
 	}
 }
 
-func (et *etubot) attack() {
+func (et *etubot) pollGamesAndAttack(team *Team) {
+	errorCount := 0
 
+	for {
+		var response GamesResponse
+		err := makeRequest(POLL_URL, &response)
+		if err != nil {
+			fmt.Println("Error polling games:", err)
+			return
+		}
+
+		if response.ErrorCode != "" {
+			fmt.Println("Error polling games code:", response.ErrorCode, "message:"+response.Message)
+			return
+		}
+
+		fmt.Printf("Found %d games\n", response.TotalRecord)
+		var target *Game
+		for _, game := range response.GamesResult.Games {
+			if team.Strength > game.DefensePoint {
+				target = &game
+				break
+			}
+		}
+
+		if target == nil {
+			time.Sleep(200)
+			continue
+		}
+
+		fmt.Println("Game:", target.ID, "opponent strength:", target.DefensePoint, "team strength:", team.Strength)
+
+		err = et.attack(target, team)
+		if err != nil {
+			errorCount++
+			if errorCount >= 10 {
+				et.bot.Send(&TelegramChat, fmt.Sprintf("More than 10 errors while trying to attack using team %d. %v", team.ID, err))
+				return
+			}
+
+			fmt.Println("error attacking:", err)
+			continue
+		}
+
+		break
+	}
+}
+
+func (et *etubot) attack(game *Game, team *Team) error {
+
+	lg := fmt.Sprintf("Attacking %d using %d, strength advantage: %d.", game.ID, team.ID, team.Strength-game.DefensePoint)
+	fmt.Println(lg)
+	auth, err := et.txAuth(team.Wallet)
+	if err != nil {
+		return err
+	}
+
+	tx, err := et.idleContract.Attack(auth, big.NewInt(game.ID), big.NewInt(team.ID))
+	if err != nil {
+		return err
+	}
+
+	fmt.Println("Attack tx hash:", tx.Hash())
+	// wait for receipt
+	for {
+		fmt.Println("Checking for receipt")
+		receipt, err := et.client.TransactionReceipt(context.Background(), tx.Hash())
+		if err != nil {
+			if err != ethereum.NotFound {
+				fmt.Println("error:", err)
+			}
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		fmt.Println("Receipt came")
+		fmt.Println(receipt)
+		if receipt.Status == types.ReceiptStatusSuccessful {
+
+			// et.bot.Send(&TelegramChat, lg)
+			et.bot.Send(&TelegramChat, fmt.Sprintf("Game #%d attack successful by team #%d.\nhttps://snowtrace.io/tx/%s", game.ID, team.ID, tx.Hash().String()), MsgSendOptions)
+			return nil
+		}
+
+		fmt.Println("Attack failed, retrying")
+		return fmt.Errorf("transaction failed on: %d", game.ID)
+	}
 }
 
 func (et *etubot) sendError(err error) {
@@ -175,6 +282,7 @@ func (et *etubot) settleGame(msg *tb.Message, gameID int64) {
 		return
 	}
 
+	fmt.Println("Team wallet:", team.Wallet)
 	auth, err := et.txAuth(team.Wallet)
 	if err != nil {
 		et.sendError(fmt.Errorf("error creating tx auth: %v", err))
@@ -192,7 +300,7 @@ func (et *etubot) settleGame(msg *tb.Message, gameID int64) {
 	go func() {
 		for {
 			fmt.Println("Checking for receipt")
-			_, err := et.client.TransactionReceipt(context.Background(), tx.Hash())
+			receipt, err := et.client.TransactionReceipt(context.Background(), tx.Hash())
 			if err != nil {
 				if err != ethereum.NotFound {
 					fmt.Println("error:", err)
@@ -200,6 +308,8 @@ func (et *etubot) settleGame(msg *tb.Message, gameID int64) {
 				time.Sleep(5 * time.Second)
 				continue
 			}
+			fmt.Println("Receipt came")
+			fmt.Println(receipt.Status, receipt.Logs)
 			et.bot.Reply(msg, fmt.Sprintf("Game #%d Team #%d has been settled.\nhttps://snowtrace.io/tx/%s", gameID, team.ID, tx.Hash().String()), MsgSendOptions)
 			break
 		}
@@ -228,12 +338,14 @@ func (et *etubot) txAuth(address string) (*bind.TransactOpts, error) {
 		return nil, err
 	}
 
-	gasPrice, err := et.client.SuggestGasPrice(context.Background())
-	if err != nil {
-		return nil, err
-	}
+	fmt.Println("Current nonce", nonce, address)
 
-	auth, err := bind.NewKeyedTransactorWithChainID(et.privateKey, big.NewInt(43114))
+	// gasPrice, err := et.client.SuggestGasPrice(context.Background())
+	// if err != nil {
+	// 	return nil, err
+	// }
+
+	auth, err := bind.NewKeyedTransactorWithChainID(et.privateKey[strings.ToLower(address)], big.NewInt(43114))
 	if err != nil {
 		return nil, err
 	}
@@ -241,7 +353,9 @@ func (et *etubot) txAuth(address string) (*bind.TransactOpts, error) {
 	auth.Nonce = big.NewInt(int64(nonce))
 	auth.Value = big.NewInt(0)     // in wei
 	auth.GasLimit = uint64(145000) // in units // TODO
-	auth.GasPrice = gasPrice
+	// auth.GasPrice = big.NewInt(0).Sub(gasPrice, big.NewInt(30000000000)) // add 30 gwei
+
+	auth.GasFeeCap = big.NewInt(100000000000)
 
 	return auth, nil
 }
@@ -304,19 +418,30 @@ func (et *etubot) allTeams() ([]Team, error) {
 	return teams, nil
 }
 
-func (et *etubot) teamIsAvailable(teamID int) bool {
+func (et *etubot) teamForID(teamID int64) (*Team, error) {
 	teams, err := et.allTeams()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, team := range teams {
+		if team.ID == teamID {
+			return &team, nil
+		}
+	}
+
+	return nil, fmt.Errorf("team does not exist in wallets")
+}
+
+func (et *etubot) teamIsAvailable(teamID int64) bool {
+	team, err := et.teamForID(teamID)
 	if err != nil {
 		et.sendError(fmt.Errorf("error fetching teams: %v", err))
 		return false
 	}
 
-	for _, team := range teams {
-		if team.ID == teamID {
-			if team.Status == "AVAILABLE" {
-				return true
-			}
-		}
+	if team.Status == "AVAILABLE" {
+		return true
 	}
 
 	return false

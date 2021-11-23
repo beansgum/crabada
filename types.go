@@ -12,7 +12,7 @@ type TeamResult struct {
 }
 
 type Team struct {
-	ID       int    `json:"team_id"`
+	ID       int64  `json:"team_id"`
 	Strength int    `json:"battle_point"`
 	Wallet   string `json:"owner"`
 	Status   string `json:"status"` //AVAILABLE/LOCK
@@ -36,12 +36,12 @@ type GamesResult struct {
 }
 
 type Game struct {
-	ID              int           `json:"game_id"`
+	ID              int64         `json:"game_id"`
 	StartTime       int64         `json:"start_time"`
 	EndTime         int64         `json:"end_time"`
 	DefensePoint    int           `json:"defense_point"`
 	AttackPoint     int           `json:"attack_point"`
-	AttackTeamID    int           `json:"attack_team_id"`
+	AttackTeamID    int64         `json:"attack_team_id"`
 	AttackTeamOwner string        `json:"attack_team_owner"`
 	WinnerTeamID    string        `json:"winner_team_id"`
 	Process         []GameProcess `json:"process"`
