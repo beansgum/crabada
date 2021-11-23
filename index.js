@@ -1,6 +1,6 @@
 let Contract = require('web3-eth-contract');
 let Web3 = require('web3');
-
+let ethers = require("ethers")
 const fs = require('fs');
 const retus = require("retus");
 const HDWalletProvider = require("@truffle/hdwallet-provider")
@@ -130,7 +130,7 @@ async function attack(game, team) {
     console.log("Attacking:", gameID, "using team:", team.ID)
 
     var attackError, txHash
-    await contract.methods.attack(gameID, team.ID).send({ from: WalletAddress}, function (err, res) {
+    await contract.methods.attack(gameID, team.ID).send({ from: WalletAddress, gasPrice: 200000000000}, function (err, res) {
         if (err) {
             console.log("Error sending attack tx:", err)
         } else {

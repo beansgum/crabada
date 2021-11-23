@@ -2,3 +2,4 @@ check if team is busy before starting a game
 check for reinforcement
 rror: nonce too low: address 0xed3428BcC71d3B0a43Bb50a64ed774bEc57100a8 current nonce (95) > tx nonce (94)
 truncate settle time
+add button to settle

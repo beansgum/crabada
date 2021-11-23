@@ -58,7 +58,7 @@ func CalcGasCost(gasLimit uint64, gasPrice *big.Int) *big.Int {
 	return gasLimitBig.Mul(gasLimitBig, gasPrice)
 }
 
-func makeRequest(url string, result *GameResponse) error {
+func makeRequest(url string, result interface{}) error {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return fmt.Errorf("error fetching contract listings: %v", err)
@@ -77,7 +77,7 @@ func makeRequest(url string, result *GameResponse) error {
 	res.Body.Close()
 
 	// fmt.Println(string(body))
-	json.Unmarshal(body, &result)
+	json.Unmarshal(body, result)
 	if err != nil {
 		return fmt.Errorf("error unmarshalling contract listings: %v", err)
 	}
