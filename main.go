@@ -252,7 +252,7 @@ func (et *etubot) pollGamesAndAttack(team *Team) {
 			continue
 		}
 
-		log.Infof("Game: %d, opponent strength: %d, team strength: %d, start time:%d", target.ID, target.DefensePoint, team.Strength, time.Since(time.Unix(target.StartTime, 0)).Truncate(time.Second))
+		log.Infof("Game: %d, opponent strength: %d, team strength: %d, start time:%s", target.ID, target.DefensePoint, team.Strength, time.Since(time.Unix(target.StartTime, 0)).Truncate(time.Second))
 
 		err = et.attack(target, team)
 		if err != nil {
@@ -286,6 +286,7 @@ func (et *etubot) attack(game *Game, team *Team) error {
 
 	log.Info("Attack tx hash:", tx.Hash())
 	// wait for receipt
+	waitStart := time.Now()
 	for {
 		receipt, err := et.client.TransactionReceipt(context.Background(), tx.Hash())
 		if err != nil {
@@ -293,6 +294,9 @@ func (et *etubot) attack(game *Game, team *Team) error {
 				log.Error("error:", err)
 			}
 			time.Sleep(5 * time.Second)
+			if time.Since(waitStart) > 2*time.Minute {
+				return fmt.Errorf("transaction failed on: %d, did not get receipt after 2 minutes", game.ID)
+			}
 			continue
 		}
 
@@ -358,12 +362,17 @@ func (et *etubot) settleGame(gameID int64) {
 
 	log.Info("Settle hash:", tx.Hash())
 	// wait for receipt
+	waitStart := time.Now()
 	for {
 		log.Info("Checking for receipt")
 		_, err := et.client.TransactionReceipt(context.Background(), tx.Hash())
 		if err != nil {
 			if err != ethereum.NotFound {
 				log.Error("error:", err)
+			}
+			if time.Since(waitStart) > 2*time.Minute {
+				et.bot.Send(TelegramChat, fmt.Sprintf("Game #%d Team #%d has been settled, but didnt not get confirmed in 1 minute.\nhttps://snowtrace.io/tx/%s", gameID, team.ID, tx.Hash().String()), MsgSendOptions)
+				return
 			}
 			time.Sleep(5 * time.Second)
 			continue
@@ -395,6 +404,11 @@ func (et *etubot) txAuth(address string) (*bind.TransactOpts, error) {
 		return nil, err
 	}
 
+	// gasPrice, err := et.client.SuggestGasPrice(context.Background())
+	// if err != nil {
+	// 	return nil, err
+	// }
+
 	auth, err := bind.NewKeyedTransactorWithChainID(et.privateKey[strings.ToLower(address)], big.NewInt(43114))
 	if err != nil {
 		return nil, err
@@ -403,9 +417,9 @@ func (et *etubot) txAuth(address string) (*bind.TransactOpts, error) {
 	auth.Nonce = big.NewInt(int64(nonce))
 	auth.Value = big.NewInt(0)     // in wei
 	auth.GasLimit = uint64(200000) // in units // TODO
-	// auth.GasPrice = big.NewInt(0).Sub(gasPrice, big.NewInt(30000000000)) // add 30 gwei
-
+	// auth.GasPrice = big.NewInt(0).Sub(gasPrice, big.NewInt(50000000000)) // add 30 gwei
 	auth.GasPrice = big.NewInt(80000000000)
+	log.Info("Using gas:", auth.GasPrice)
 
 	return auth, nil
 }
