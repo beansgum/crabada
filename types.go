@@ -50,3 +50,16 @@ type Game struct {
 type GameProcess struct {
 	Action string `json:"action"`
 }
+
+type GasResponse struct {
+	ErrorCode int     `json:"error_code"`
+	Data      GasData `json:"data"`
+}
+
+type GasData struct {
+	Fast GasPrice `json:"fast"`
+}
+
+type GasPrice struct {
+	Price int64 `json:"price"`
+}

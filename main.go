@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/c-ollins/crabada/idlegame"
@@ -33,6 +34,8 @@ const (
 	POLL_URL  = "https://idle-api.crabada.com/public/idle/mines?page=1&status=open&looter_address=0xed3428bcc71d3b0a43bb50a64ed774bec57100a8&can_loot=1&limit=8"
 	LOOT_URL  = "https://idle-api.crabada.com/public/idle/mines?looter_address=%s&page=1&status=open&limit=8"
 	TEAMS_URL = "https://idle-api.crabada.com/public/idle/teams?user_address=%s"
+
+	GAS_API = "https://api.debank.com/chain/gas_price_dict_v2?chain=avax"
 )
 
 var (
@@ -57,6 +60,9 @@ func main() {
 type etubot struct {
 	bot    *tb.Bot
 	isAuto bool
+
+	gasPrice *big.Int
+	gasMu    sync.RWMutex
 
 	attackCh chan *Team
 
@@ -164,21 +170,17 @@ func (et *etubot) start() {
 	})
 
 	log.Info("Bot running")
+	err = et.updateGasPrice()
+	if err != nil {
+		log.Error(err)
+		return
+	}
 	go et.queAttacks()
 	if et.isAuto {
 		go et.auto()
 	}
+	go et.gasUpdate()
 	b.Start()
-}
-
-func (et *etubot) gas(msg *tb.Message) {
-	gasPrice, err := et.client.SuggestGasPrice(context.Background())
-	if err != nil {
-		et.sendError(fmt.Errorf("error finding gas fee:%v", err))
-		return
-	}
-
-	et.bot.Reply(msg, fmt.Sprintf("%d gwei", big.NewInt(0).Div(gasPrice, big.NewInt(1e9))))
 }
 
 func (et *etubot) raid() {
@@ -418,8 +420,10 @@ func (et *etubot) txAuth(address string) (*bind.TransactOpts, error) {
 	auth.Value = big.NewInt(0)     // in wei
 	auth.GasLimit = uint64(200000) // in units // TODO
 	// auth.GasPrice = big.NewInt(0).Sub(gasPrice, big.NewInt(50000000000)) // add 30 gwei
-	auth.GasPrice = big.NewInt(80000000000)
-	log.Info("Using gas:", auth.GasPrice)
+	et.gasMu.RLock()
+	auth.GasPrice = big.NewInt(0).Sub(et.gasPrice, big.NewInt(20000000000))
+	et.gasMu.RUnlock()
+	log.Info("Using gas:", big.NewInt(0).Div(auth.GasPrice, big.NewInt(1e9)))
 
 	return auth, nil
 }
@@ -545,6 +549,41 @@ func (et *etubot) sendTeams(msg *tb.Message) {
 	}
 
 	et.bot.Reply(msg, sb)
+}
+
+func (et *etubot) gas(msg *tb.Message) {
+
+	et.gasMu.RLock()
+	gasPrice := et.gasPrice
+	et.gasMu.RUnlock()
+
+	et.bot.Reply(msg, fmt.Sprintf("%d gwei", big.NewInt(0).Div(gasPrice, big.NewInt(1e9))))
+}
+
+func (et *etubot) gasUpdate() {
+	fmt.Println("Gas update running")
+	for {
+		err := et.updateGasPrice()
+		if err != nil {
+			et.sendError(fmt.Errorf("err updating gas: %v", err))
+		}
+		time.Sleep(10 * time.Second)
+	}
+}
+
+func (et *etubot) updateGasPrice() error {
+	var response GasResponse
+	err := makeRequest(GAS_API, &response)
+	if err != nil {
+		return fmt.Errorf("error fetching gas: %v", err)
+	}
+
+	gasPrice := big.NewInt(response.Data.Fast.Price)
+	et.gasMu.Lock()
+	et.gasPrice = gasPrice
+	et.gasMu.Unlock()
+
+	return nil
 }
 
 func (et *etubot) auto() {
