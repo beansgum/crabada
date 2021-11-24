@@ -329,7 +329,7 @@ func (et *etubot) settleAll(isAuto bool) {
 
 	for _, game := range games {
 		tm := time.Unix(game.StartTime, 0)
-		settle := tm.Add(time.Duration(1) * time.Hour).Add(time.Duration(5) * time.Minute)
+		settle := tm.Add(time.Duration(1) * time.Hour).Add(time.Duration(1) * time.Minute)
 		if time.Now().After(settle) {
 			totalSettled++
 			et.settleGame(game.ID)
@@ -419,9 +419,9 @@ func (et *etubot) txAuth(address string) (*bind.TransactOpts, error) {
 	auth.Nonce = big.NewInt(int64(nonce))
 	auth.Value = big.NewInt(0)     // in wei
 	auth.GasLimit = uint64(200000) // in units // TODO
-	// auth.GasPrice = big.NewInt(0).Sub(gasPrice, big.NewInt(50000000000)) // add 30 gwei
+	// auth.GasPrice = big.NewInt(0).Add(gasPrice, big.NewInt(50000000000)) // add 30 gwei
 	et.gasMu.RLock()
-	auth.GasPrice = big.NewInt(0).Sub(et.gasPrice, big.NewInt(20000000000))
+	auth.GasPrice = big.NewInt(0).Add(et.gasPrice, big.NewInt(20000000000))
 	et.gasMu.RUnlock()
 	log.Info("Using gas:", big.NewInt(0).Div(auth.GasPrice, big.NewInt(1e9)))
 
@@ -461,7 +461,7 @@ func (et *etubot) sendActiveLoots(msg *tb.Message) {
 	for _, game := range games {
 		tm := time.Unix(game.StartTime, 0)
 
-		settle := tm.Add(time.Duration(1) * time.Hour).Add(time.Duration(5) * time.Minute)
+		settle := tm.Add(time.Duration(1) * time.Hour).Add(time.Duration(1) * time.Minute)
 		lootSummary := "💰 Loot\n"
 		lootSummary += fmt.Sprintf("Game: %d\n", game.ID)
 		lootSummary += fmt.Sprintf("Team: %d\n", game.AttackTeamID)
