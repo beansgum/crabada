@@ -89,9 +89,10 @@ func (et *etubot) start() {
 	}
 	et.privateKey[strings.ToLower("0xf91fF01b9EF0d83D0bBd89953d53504f099A3DFf")] = privateKey2
 
-	client, err := ethclient.Dial("wss://api.avax.network/ext/bc/C/ws")
+	log.Info("Connecting to infura")
+	client, err := ethclient.Dial("https://api.avax.network/ext/bc/C/rpc")
 	if err != nil {
-		log.Error(err)
+		log.Error("ethclient:", err)
 		return
 	}
 	et.client = client
@@ -175,12 +176,16 @@ func (et *etubot) start() {
 		log.Error(err)
 		return
 	}
+
+	// go et.watchStartGame()
 	go et.queAttacks()
 	if et.isAuto {
 		go et.auto()
 	}
 	go et.gasUpdate()
 	b.Start()
+
+	select {}
 }
 
 func (et *etubot) raid() {
@@ -259,8 +264,8 @@ func (et *etubot) pollGamesAndAttack(team *Team) {
 		err = et.attack(target, team)
 		if err != nil {
 			errorCount++
-			if errorCount >= 10 {
-				et.bot.Send(TelegramChat, fmt.Sprintf("More than 10 errors while trying to attack using team %d. %v", team.ID, err))
+			if errorCount >= 5 {
+				et.bot.Send(TelegramChat, fmt.Sprintf("More than 5 errors while trying to attack using team %d. %v", team.ID, err))
 				return
 			}
 
@@ -403,7 +408,7 @@ func (et *etubot) findMyLootTeam(gameID int64) (*Team, error) {
 func (et *etubot) txAuth(address string) (*bind.TransactOpts, error) {
 	nonce, err := et.client.PendingNonceAt(context.Background(), common.HexToAddress(address))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error getting nonce: %v", err)
 	}
 
 	// gasPrice, err := et.client.SuggestGasPrice(context.Background())
@@ -413,7 +418,7 @@ func (et *etubot) txAuth(address string) (*bind.TransactOpts, error) {
 
 	auth, err := bind.NewKeyedTransactorWithChainID(et.privateKey[strings.ToLower(address)], big.NewInt(43114))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error creating transactor: %v", err)
 	}
 
 	auth.Nonce = big.NewInt(int64(nonce))
@@ -584,6 +589,29 @@ func (et *etubot) updateGasPrice() error {
 	et.gasMu.Unlock()
 
 	return nil
+}
+
+func (et *etubot) watchStartGame() {
+	watchOpts := &bind.WatchOpts{Context: context.Background(), Start: nil}
+	channel := make(chan *idlegame.IdlegameStartGame)
+
+	// Start a goroutine which watches new events
+	go func() {
+		log.Info("Subscribing to contract")
+		sub, err := et.idleContract.WatchStartGame(watchOpts, channel)
+		if err != nil {
+			et.sendError(fmt.Errorf("error watching start game: %v", err))
+			return
+		}
+		defer sub.Unsubscribe()
+	}()
+
+	log.Info("Watch start game")
+
+	for {
+		event := <-channel
+		log.Infof("New game id: %d, team id: %d", event.GameId, event.TeamId)
+	}
 }
 
 func (et *etubot) auto() {
