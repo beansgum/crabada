@@ -127,12 +127,20 @@ func (et *etubot) start() {
 			go et.gas(m)
 			return
 		case m.Text == "/raid":
+			if et.isAuto {
+				et.bot.Send(TelegramChat, "cmd disabled in auto.")
+				return
+			}
 			go et.raid()
 			return
 		case m.Text == "/loots":
 			go et.sendActiveLoots(m)
 			return
 		case m.Text == "/settleall":
+			if et.isAuto {
+				et.bot.Send(TelegramChat, "cmd disabled in auto.")
+				return
+			}
 			go et.settleAll(false)
 			return
 		case m.Text == "/teams":
@@ -141,6 +149,11 @@ func (et *etubot) start() {
 		}
 
 		if matches := settleRegex.FindStringSubmatch(m.Text); len(matches) > 1 {
+			if et.isAuto {
+				et.bot.Send(TelegramChat, "cmd disabled in auto.")
+				return
+			}
+
 			gameID, err := strconv.Atoi(matches[1])
 			if err != nil {
 				b.Reply(m, err.Error())
@@ -149,6 +162,11 @@ func (et *etubot) start() {
 
 			go et.settleGame(int64(gameID))
 		} else if matches := attackRegex.FindStringSubmatch(m.Text); len(matches) > 1 {
+			if et.isAuto {
+				et.bot.Send(TelegramChat, "cmd disabled in auto.")
+				return
+			}
+
 			teamID, err := strconv.Atoi(matches[1])
 			if err != nil {
 				b.Reply(m, err.Error())
@@ -178,7 +196,7 @@ func (et *etubot) start() {
 	}
 
 	// go et.watchStartGame()
-	go et.queAttacks()
+	// go et.queAttacks()
 	if et.isAuto {
 		go et.auto()
 	}
@@ -197,14 +215,19 @@ func (et *etubot) raid() {
 
 	queue := 0
 	for _, team := range teams {
-		if team.Status == TeamAvailable {
-			queue++
-			et.attackCh <- team
+
+		if !et.teamIsAvailable(team.ID) {
+			// lg := fmt.Sprintf("Cannot attack, team %d is not available", team.ID)
+			// log.Info(lg)
+			// et.bot.Send(TelegramChat, lg)
+			continue
 		}
+
+		et.pollGamesAndAttack(team)
+		queue++
 	}
-	if queue > 0 {
-		et.bot.Send(TelegramChat, fmt.Sprintf("Queued %d teams for attack.", queue))
-	} else if !et.isAuto {
+
+	if !et.isAuto && queue == 0 {
 		et.bot.Send(TelegramChat, "All teams are busy.")
 	}
 }
@@ -227,6 +250,7 @@ func (et *etubot) queAttacks() {
 func (et *etubot) pollGamesAndAttack(team *Team) {
 	errorCount := 0
 	lastBlock := uint64(0)
+	et.bot.Send(TelegramChat, fmt.Sprintf("Finding game using team #%d", team.ID))
 
 	for {
 		bestBlock, err := et.client.BlockNumber(context.Background())
@@ -261,8 +285,8 @@ func (et *etubot) pollGamesAndAttack(team *Team) {
 			}
 
 			gameAge := time.Since(time.Unix(int64(gameInfo.StartTime), 0))
-
-			if team.Strength > int(teamInfo.BattlePoint) && gameAge < (5*time.Second) {
+			strengthDiff := team.Strength - int(teamInfo.BattlePoint)
+			if strengthDiff >= 30 && gameAge < (5*time.Second) {
 				target = &Game{ID: gamesIter.Event.GameId.Int64(), DefensePoint: int(teamInfo.BattlePoint), StartTime: int64(gameInfo.StartTime)}
 				break
 			}
@@ -292,7 +316,8 @@ func (et *etubot) pollGamesAndAttack(team *Team) {
 
 func (et *etubot) attack(game *Game, team *Team) error {
 
-	lg := fmt.Sprintf("Attacking %d using %d, strength advantage: %d.", game.ID, team.ID, team.Strength-game.DefensePoint)
+	strengthDiff := team.Strength - game.DefensePoint
+	lg := fmt.Sprintf("Attacking %d using %d, strength advantage: %d.", game.ID, team.ID, strengthDiff)
 	log.Info(lg)
 	auth, err := et.txAuth(team.Wallet)
 	if err != nil {
@@ -322,7 +347,7 @@ func (et *etubot) attack(game *Game, team *Team) error {
 
 		log.Info(receipt)
 		if receipt.Status == types.ReceiptStatusSuccessful {
-			et.bot.Send(TelegramChat, fmt.Sprintf("Game #%d attack successful by team #%d.\nhttps://snowtrace.io/tx/%s", game.ID, team.ID, tx.Hash().String()), MsgSendOptions)
+			et.bot.Send(TelegramChat, fmt.Sprintf("Game #%d attack successful by team #%d, defense adv: %d.\nhttps://snowtrace.io/tx/%s", game.ID, team.ID, strengthDiff, tx.Hash().String()), MsgSendOptions)
 			return nil
 		}
 
@@ -670,7 +695,7 @@ func (et *etubot) watchStartGame() {
 }
 
 func (et *etubot) auto() {
-	// et.bot.Send(TelegramChat, "Etubot running on auto.")
+	et.bot.Send(TelegramChat, "Etubot running on auto.")
 	for {
 		log.Info("Auto running")
 		// settle ready games
@@ -681,12 +706,13 @@ func (et *etubot) auto() {
 		limit := big.NewInt(200000000000) //200gwei
 
 		if gasPrice.Cmp(limit) >= 0 {
+			// notify high gas
 			// continue
 		} else {
 			et.settleAll(true)
 			et.raid()
 		}
 
-		time.Sleep(5 * time.Minute)
+		time.Sleep(30 * time.Second)
 	}
 }
