@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	INTERNAL_SERVER_ERROR = "INTERNAL_SERVER_ERROR"
+	InternalServerError = "INTERNAL_SERVER_ERROR"
 
 	IdleContractAddress = "0x82a85407BD612f52577909F4A58bfC6873f14DA8"
 
@@ -31,11 +31,11 @@ const (
 
 	TeamAvailable = "AVAILABLE"
 
-	POLL_URL  = "https://idle-api.crabada.com/public/idle/mines?page=1&status=open&looter_address=0xed3428bcc71d3b0a43bb50a64ed774bec57100a8&can_loot=1&limit=8"
-	LOOT_URL  = "https://idle-api.crabada.com/public/idle/mines?looter_address=%s&page=1&status=open&limit=8"
-	TEAMS_URL = "https://idle-api.crabada.com/public/idle/teams?user_address=%s"
+	PollURL  = "https://idle-api.crabada.com/public/idle/mines?page=1&status=open&looter_address=0xed3428bcc71d3b0a43bb50a64ed774bec57100a8&can_loot=1&limit=8"
+	LootURL  = "https://idle-api.crabada.com/public/idle/mines?looter_address=%s&page=1&status=open&limit=8"
+	TeamsURL = "https://idle-api.crabada.com/public/idle/teams?user_address=%s"
 
-	GAS_API = "https://api.debank.com/chain/gas_price_dict_v2?chain=avax"
+	GasAPI = "https://api.debank.com/chain/gas_price_dict_v2?chain=avax"
 )
 
 var (
@@ -226,36 +226,49 @@ func (et *etubot) queAttacks() {
 
 func (et *etubot) pollGamesAndAttack(team *Team) {
 	errorCount := 0
+	lastBlock := uint64(0)
 
 	for {
-		var response GamesResponse
-		err := makeRequest(POLL_URL, &response)
+		bestBlock, err := et.client.BlockNumber(context.Background())
 		if err != nil {
-			log.Error("error polling games:", err)
-			return
+			et.sendError(fmt.Errorf("error getting block number: %v", err))
+			continue
 		}
 
-		if response.ErrorCode != "" {
-			log.Error("Error polling games code: %s, message %s", response.ErrorCode, response.Message)
-			if response.ErrorCode == INTERNAL_SERVER_ERROR {
+		if bestBlock == lastBlock {
+			continue
+		}
+
+		filterOpts := &bind.FilterOpts{Context: context.Background(), Start: bestBlock}
+		gamesIter, err := et.idleContract.FilterStartGame(filterOpts)
+		if err != nil {
+			et.sendError(fmt.Errorf("error filtering start game: %v", err))
+			continue
+		}
+
+		var target *Game
+		for gamesIter.Next() {
+			gameInfo, err := et.idleContract.GetGameBasicInfo(&bind.CallOpts{Context: context.Background()}, gamesIter.Event.GameId)
+			if err != nil {
+				et.sendError(fmt.Errorf("error getting game info: %v", err))
 				continue
 			}
 
-			return
-		}
+			teamInfo, err := et.idleContract.GetTeamInfo(&bind.CallOpts{Context: context.Background()}, gamesIter.Event.TeamId)
+			if err != nil {
+				et.sendError(fmt.Errorf("error getting team info: %v", err))
+				continue
+			}
 
-		log.Infof("Found %d games", response.TotalRecord)
-		var target *Game
-		for _, game := range response.GamesResult.Games {
+			gameAge := time.Since(time.Unix(int64(gameInfo.StartTime), 0))
 
-			if team.Strength > game.DefensePoint && time.Since(time.Unix(game.StartTime, 0)) < (10*time.Second) {
-				target = &game
+			if team.Strength > int(teamInfo.BattlePoint) && gameAge < (5*time.Second) {
+				target = &Game{ID: gamesIter.Event.GameId.Int64(), DefensePoint: int(teamInfo.BattlePoint), StartTime: int64(gameInfo.StartTime)}
 				break
 			}
 		}
 
 		if target == nil {
-			time.Sleep(200)
 			continue
 		}
 
@@ -264,8 +277,8 @@ func (et *etubot) pollGamesAndAttack(team *Team) {
 		err = et.attack(target, team)
 		if err != nil {
 			errorCount++
-			if errorCount >= 5 {
-				et.bot.Send(TelegramChat, fmt.Sprintf("More than 5 errors while trying to attack using team %d. %v", team.ID, err))
+			if errorCount >= 3 {
+				et.bot.Send(TelegramChat, fmt.Sprintf("More than 3 errors while trying to attack using team %d. %v", team.ID, err))
 				return
 			}
 
@@ -320,7 +333,7 @@ func (et *etubot) attack(game *Game, team *Team) error {
 
 func (et *etubot) sendError(err error) {
 	log.Error(err)
-	et.bot.Send(TelegramChat, err)
+	// et.bot.Send(TelegramChat, err.Error())
 }
 
 func (et *etubot) settleAll(isAuto bool) {
@@ -426,9 +439,16 @@ func (et *etubot) txAuth(address string) (*bind.TransactOpts, error) {
 	auth.GasLimit = uint64(200000) // in units // TODO
 	// auth.GasPrice = big.NewInt(0).Add(gasPrice, big.NewInt(50000000000)) // add 30 gwei
 	et.gasMu.RLock()
-	auth.GasPrice = big.NewInt(0).Add(et.gasPrice, big.NewInt(20000000000))
+	auth.GasPrice = big.NewInt(0).Add(et.gasPrice, big.NewInt(30000000000))
 	et.gasMu.RUnlock()
-	log.Info("Using gas:", big.NewInt(0).Div(auth.GasPrice, big.NewInt(1e9)))
+	limit := big.NewInt(200000000000) //200gwei
+
+	if auth.GasPrice.Cmp(limit) >= 0 {
+		// et.bot.Send(TelegramChat, "Cannot make transaction, gas is higher than 200gwei.")
+		return nil, fmt.Errorf("cannot make tx, gas too high")
+	}
+
+	log.Info("Using gas:", big.NewInt(0).Div(auth.GasPrice, big.NewInt(1e9)), auth.GasPrice.Cmp(limit))
 
 	return auth, nil
 }
@@ -438,7 +458,7 @@ func (et *etubot) activeLoots() ([]Game, error) {
 	for i := 0; i < len(wallets); i++ {
 
 		var response GamesResponse
-		err := makeRequest(fmt.Sprintf(LOOT_URL, wallets[i]), &response)
+		err := makeRequest(fmt.Sprintf(LootURL, wallets[i]), &response)
 		if err != nil {
 			log.Error("Error fetching active loots:", err)
 			return nil, err
@@ -474,7 +494,7 @@ func (et *etubot) sendActiveLoots(msg *tb.Message) {
 		if time.Now().After(settle) {
 			lootSummary += "Ready: yes\n"
 		} else {
-			lootSummary += fmt.Sprintf("Settle in: %s\n", settle.Sub(time.Now()))
+			lootSummary += fmt.Sprintf("Settle in: %s\n", time.Until(settle))
 		}
 
 		sb += "\n" + lootSummary
@@ -487,7 +507,7 @@ func (et *etubot) allTeams() ([]*Team, error) {
 	var teams []*Team
 	for i := 0; i < len(wallets); i++ {
 		var response TeamsResponse
-		err := makeRequest(fmt.Sprintf(TEAMS_URL, wallets[i]), &response)
+		err := makeRequest(fmt.Sprintf(TeamsURL, wallets[i]), &response)
 		if err != nil {
 			log.Error("Error fetching teams:", err)
 			return nil, err
@@ -578,12 +598,14 @@ func (et *etubot) gasUpdate() {
 
 func (et *etubot) updateGasPrice() error {
 	var response GasResponse
-	err := makeRequest(GAS_API, &response)
+	err := makeRequest(GasAPI, &response)
 	if err != nil {
 		return fmt.Errorf("error fetching gas: %v", err)
 	}
 
-	gasPrice := big.NewInt(response.Data.Fast.Price)
+	// fmt.Printf("New gas price: %d\n", int64(response.Data.Fast.Price))
+
+	gasPrice := big.NewInt(int64(response.Data.Fast.Price))
 	et.gasMu.Lock()
 	et.gasPrice = gasPrice
 	et.gasMu.Unlock()
@@ -592,35 +614,78 @@ func (et *etubot) updateGasPrice() error {
 }
 
 func (et *etubot) watchStartGame() {
-	watchOpts := &bind.WatchOpts{Context: context.Background(), Start: nil}
-	channel := make(chan *idlegame.IdlegameStartGame)
-
-	// Start a goroutine which watches new events
-	go func() {
-		log.Info("Subscribing to contract")
-		sub, err := et.idleContract.WatchStartGame(watchOpts, channel)
+	for {
+		bestBlock, err := et.client.BlockNumber(context.Background())
 		if err != nil {
-			et.sendError(fmt.Errorf("error watching start game: %v", err))
+			et.sendError(fmt.Errorf("error getting block number: %v", err))
 			return
 		}
-		defer sub.Unsubscribe()
-	}()
 
-	log.Info("Watch start game")
+		log.Info("Bestblock:", bestBlock)
+		filterOpts := &bind.FilterOpts{Context: context.Background(), Start: bestBlock}
+		gamesIter, err := et.idleContract.FilterStartGame(filterOpts)
+		if err != nil {
+			et.sendError(fmt.Errorf("error filtering start game: %v", err))
+			return
+		}
 
-	for {
-		event := <-channel
-		log.Infof("New game id: %d, team id: %d", event.GameId, event.TeamId)
+		for gamesIter.Next() {
+			gameInfo, err := et.idleContract.GetGameBasicInfo(&bind.CallOpts{Context: context.Background()}, gamesIter.Event.GameId)
+			if err != nil {
+				et.sendError(fmt.Errorf("error getting game info: %v", err))
+				return
+			}
+
+			teamInfo, err := et.idleContract.GetTeamInfo(&bind.CallOpts{Context: context.Background()}, gamesIter.Event.TeamId)
+			if err != nil {
+				et.sendError(fmt.Errorf("error getting game info: %v", err))
+				return
+			}
+
+			gameAge := time.Since(time.Unix(int64(gameInfo.StartTime), 0)).Truncate(time.Second)
+
+			log.Info("Game:", gamesIter.Event.GameId, "Strength:", teamInfo.BattlePoint, "Start:", gameAge)
+		}
 	}
+	// watchOpts := &bind.WatchOpts{Context: context.Background(), Start: nil}
+	// channel := make(chan *idlegame.IdlegameStartGame)
+
+	// // Start a goroutine which watches new events
+	// go func() {
+	// 	log.Info("Subscribing to contract")
+	// 	sub, err := et.idleContract.WatchStartGame(watchOpts, channel)
+	// 	if err != nil {
+	// 		et.sendError(fmt.Errorf("error watching start game: %v", err))
+	// 		return
+	// 	}
+	// 	defer sub.Unsubscribe()
+	// }()
+
+	// log.Info("Watch start game")
+
+	// for {
+	// 	event := <-channel
+	// 	log.Infof("New game id: %d, team id: %d", event.GameId, event.TeamId)
+	// }
 }
 
 func (et *etubot) auto() {
-	et.bot.Send(TelegramChat, "Etubot running on auto.")
+	// et.bot.Send(TelegramChat, "Etubot running on auto.")
 	for {
 		log.Info("Auto running")
 		// settle ready games
-		et.settleAll(true)
-		et.raid()
+
+		et.gasMu.RLock()
+		gasPrice := big.NewInt(0).Add(et.gasPrice, big.NewInt(30000000000))
+		et.gasMu.RUnlock()
+		limit := big.NewInt(200000000000) //200gwei
+
+		if gasPrice.Cmp(limit) >= 0 {
+			// continue
+		} else {
+			et.settleAll(true)
+			et.raid()
+		}
 
 		time.Sleep(5 * time.Minute)
 	}

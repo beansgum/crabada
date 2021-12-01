@@ -61,5 +61,5 @@ type GasData struct {
 }
 
 type GasPrice struct {
-	Price int64 `json:"price"`
+	Price float64 `json:"price"`
 }
