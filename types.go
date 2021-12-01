@@ -57,12 +57,39 @@ func (g Game) settleTime() time.Time {
 	return g.startTime().Add(time.Duration(1) * time.Hour)
 }
 
+func (g Game) isWonOrLost() bool {
+	latestProcess := g.lastProcess()
+
+	// true if  the enemy did not reinforce or we did not reattack a reinforcement in time
+	return time.Since(latestProcess.txTime()) > processIntervals
+}
+
 func (g Game) canSettle() bool {
-	return time.Now().After(g.settleTime())
+	return g.isWonOrLost() && time.Now().After(g.settleTime())
+}
+
+func (g Game) lastProcess() GameProcess {
+	return g.Process[len(g.Process)-1]
+}
+
+func (g Game) needsReinforcement() bool {
+	latestProcess := g.lastProcess()
+	if latestProcess.Action == actionReinforceDefense {
+		if time.Since(latestProcess.txTime()) < processIntervals {
+			return true
+		}
+	}
+
+	return false
 }
 
 type GameProcess struct {
 	Action string `json:"action"`
+	TxTime int64  `json:"transaction_time"`
+}
+
+func (gp GameProcess) txTime() time.Time {
+	return time.Unix(gp.TxTime, 0)
 }
 
 type GasResponse struct {

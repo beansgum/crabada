@@ -45,6 +45,11 @@ var (
 	settleRegex = regexp.MustCompile(`\/settle (.+)`)
 	attackRegex = regexp.MustCompile(`\/attack (.+)`)
 
+	actionReinforceDefense = "reinforce-defense"
+	actionAttack           = "attack"
+
+	processIntervals = 30 * time.Minute
+
 	wallets = []string{"0xed3428BcC71d3B0a43Bb50a64ed774bEc57100a8", "0xf91fF01b9EF0d83D0bBd89953d53504f099A3DFf"}
 )
 
@@ -198,7 +203,7 @@ func (et *etubot) start() {
 	// go et.watchStartGame()
 	// go et.queAttacks()
 	if et.isAuto {
-		go et.auto()
+		// go et.auto()
 	}
 	go et.gasUpdate()
 	b.Start()
@@ -503,13 +508,33 @@ func (et *etubot) sendActiveLoots(msg *tb.Message) {
 		et.sendError(fmt.Errorf("error fetching active loots: %v", err))
 		return
 	}
-
 	sb := fmt.Sprintf("%d active loots 💰🤑💰\n-------------------------\n", len(games))
 	for _, game := range games {
 		lootSummary := "💰 Loot\n"
 		lootSummary += fmt.Sprintf("Game: %d\n", game.ID)
 		lootSummary += fmt.Sprintf("Team: %d\n", game.AttackTeamID)
 		lootSummary += fmt.Sprintf("Account: %s\n", game.AttackTeamOwner[:7])
+		if len(game.Process) > 0 {
+			latestProcess := game.lastProcess()
+			var lastAction, status string
+			if latestProcess.Action == actionAttack {
+				lastAction = "attacked"
+				if time.Since(latestProcess.txTime()) > processIntervals {
+					status = "won"
+				} else {
+					status = "waiting for opponent's reinforcement"
+				}
+			} else if latestProcess.Action == actionReinforceDefense {
+				lastAction = "opponent reinforced"
+				if time.Since(latestProcess.txTime()) > processIntervals {
+					status = "lost"
+				} else {
+					status = fmt.Sprintf("%d reinforcement needed", game.DefensePoint-game.AttackPoint)
+				}
+			}
+			lootSummary += fmt.Sprintf("Last action: %s\n", lastAction)
+			lootSummary += fmt.Sprintf("Status: %s\n", status)
+		}
 		if game.canSettle() {
 			lootSummary += "Ready: yes\n"
 		} else {
