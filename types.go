@@ -1,5 +1,7 @@
 package main
 
+import "time"
+
 type TeamsResponse struct {
 	ErrorCode  string `json:"error_code"`
 	Message    string `json:"message"`
@@ -45,6 +47,18 @@ type Game struct {
 	AttackTeamOwner string        `json:"attack_team_owner"`
 	WinnerTeamID    string        `json:"winner_team_id"`
 	Process         []GameProcess `json:"process"`
+}
+
+func (g Game) startTime() time.Time {
+	return time.Unix(g.StartTime, 0)
+}
+
+func (g Game) settleTime() time.Time {
+	return g.startTime().Add(time.Duration(1) * time.Hour)
+}
+
+func (g Game) canSettle() bool {
+	return time.Now().After(g.settleTime())
 }
 
 type GameProcess struct {

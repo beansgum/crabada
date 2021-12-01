@@ -286,7 +286,7 @@ func (et *etubot) pollGamesAndAttack(team *Team) {
 
 			gameAge := time.Since(time.Unix(int64(gameInfo.StartTime), 0))
 			strengthDiff := team.Strength - int(teamInfo.BattlePoint)
-			if strengthDiff >= 30 && gameAge < (5*time.Second) {
+			if strengthDiff >= 20 && gameAge < (3*time.Second) {
 				target = &Game{ID: gamesIter.Event.GameId.Int64(), DefensePoint: int(teamInfo.BattlePoint), StartTime: int64(gameInfo.StartTime)}
 				break
 			}
@@ -369,11 +369,8 @@ func (et *etubot) settleAll(isAuto bool) {
 	}
 
 	totalSettled := 0
-
 	for _, game := range games {
-		tm := time.Unix(game.StartTime, 0)
-		settle := tm.Add(time.Duration(1) * time.Hour).Add(time.Duration(1) * time.Minute)
-		if time.Now().After(settle) {
+		if game.canSettle() {
 			totalSettled++
 			et.settleGame(game.ID)
 		}
@@ -509,17 +506,14 @@ func (et *etubot) sendActiveLoots(msg *tb.Message) {
 
 	sb := fmt.Sprintf("%d active loots 💰🤑💰\n-------------------------\n", len(games))
 	for _, game := range games {
-		tm := time.Unix(game.StartTime, 0)
-
-		settle := tm.Add(time.Duration(1) * time.Hour).Add(time.Duration(1) * time.Minute)
 		lootSummary := "💰 Loot\n"
 		lootSummary += fmt.Sprintf("Game: %d\n", game.ID)
 		lootSummary += fmt.Sprintf("Team: %d\n", game.AttackTeamID)
 		lootSummary += fmt.Sprintf("Account: %s\n", game.AttackTeamOwner[:7])
-		if time.Now().After(settle) {
+		if game.canSettle() {
 			lootSummary += "Ready: yes\n"
 		} else {
-			lootSummary += fmt.Sprintf("Settle in: %s\n", time.Until(settle))
+			lootSummary += fmt.Sprintf("Settle in: %s\n", time.Until(game.settleTime()))
 		}
 
 		sb += "\n" + lootSummary
