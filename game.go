@@ -83,7 +83,7 @@ func (et *etubot) reinforceAttacks() {
 
 	for _, game := range games {
 		if game.needsReinforcement() {
-			log.Infof("Reinforcing game #%d", game.ID)
+
 			var crabsResponse CrabsResponse
 			err = makeRequest(fmt.Sprintf(CrabsURL, game.AttackTeamOwner), &crabsResponse)
 			if err != nil {
@@ -100,11 +100,16 @@ func (et *etubot) reinforceAttacks() {
 			var chosenCrab *Crab
 			for _, crab := range crabsResponse.Data.Crabs {
 				if crab.BattlePoint >= strengthNeeded && (chosenCrab == nil || chosenCrab.BattlePoint > crab.BattlePoint) {
-					chosenCrab = &crab
+					if et.crabIsAvailable(int64(crab.CrabadaID)) {
+						chosenCrab = &crab
+					} else {
+						log.Infof("Tried to pick crab %d for game %d but not available", crab.CrabadaID, game.ID)
+					}
 				}
 			}
 
 			if chosenCrab != nil {
+				log.Infof("Reinforcing game #%d using crab #%d", game.ID, chosenCrab.ID)
 				auth, err := et.txAuth(game.AttackTeamOwner, false)
 				if err != nil {
 					et.sendError(fmt.Errorf("error creating tx auth: %v", err))
@@ -117,7 +122,7 @@ func (et *etubot) reinforceAttacks() {
 					return
 				}
 
-				txt := fmt.Sprintf("Game #%d reinforced with strength %d, battle points: %d vs %d.\nhttps://snowtrace.io/tx/%s", game.ID, chosenCrab.BattlePoint, game.AttackPoint, game.DefensePoint, tx.Hash())
+				txt := fmt.Sprintf("Game #%d reinforced with strength %d, battle points: %d vs %d.\nhttps://snowtrace.io/tx/%s", game.ID, chosenCrab.BattlePoint, chosenCrab.BattlePoint+game.AttackPoint, game.DefensePoint, tx.Hash())
 				et.bot.Send(TelegramChat, txt, MsgSendOptions)
 			} else {
 				log.Infof("Cannot reinforce game #%d, no available crab", game.ID)
@@ -173,6 +178,33 @@ func (et *etubot) activeLoots() ([]Game, error) {
 	return games, nil
 }
 
+func (et *etubot) crabIsAvailable(crabID int64) bool {
+	crab, err := et.crabForID(crabID)
+	if err != nil {
+		et.sendError(fmt.Errorf("error fetching crab: %v", err))
+		return false
+	}
+
+	if crab.Status == "AVAILABLE" {
+		return true
+	}
+
+	return false
+}
+
+func (et *etubot) crabForID(crabID int64) (*Crab, error) {
+	var response CrabResponse
+	err := makeRequest(fmt.Sprintf("https://idle-api.crabada.com/public/idle/crabada/info/%d", crabID), &response)
+	if err != nil {
+		return nil, fmt.Errorf("error fetching game by id: %v", err)
+	}
+
+	if response.ErrorCode != "" {
+		return nil, fmt.Errorf("error fetching game by id: %s, message: %s", response.ErrorCode, response.Message)
+	}
+
+	return &response.Crab, nil
+}
 func (et *etubot) allTeams() ([]*Team, error) {
 	var teams []*Team
 	for i := 0; i < len(wallets); i++ {

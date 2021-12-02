@@ -61,7 +61,7 @@ func (g Game) isWonOrLost() bool {
 	latestProcess := g.lastProcess()
 
 	// true if  the enemy did not reinforce or we did not reattack a reinforcement in time
-	return time.Since(latestProcess.txTime()) > processIntervals
+	return time.Since(latestProcess.txTime()) > processIntervals || len(g.Process) == 6
 }
 
 func (g Game) canSettle() bool {
@@ -116,9 +116,16 @@ type CrabsResult struct {
 	Crabs       []Crab `json:"data"`
 }
 
+type CrabResponse struct {
+	ErrorCode string `json:"error_code"`
+	Message   string `json:"message"`
+	Crab      `json:"result"`
+}
+
 type Crab struct {
-	CrabadaID   int `json:"crabada_id"`
-	ID          int `json:"id"`
-	BattlePoint int `json:"battle_point"`
-	MinePoint   int `json:"mine_point"`
+	CrabadaID   int    `json:"crabada_id"`
+	ID          int    `json:"id"`
+	BattlePoint int    `json:"battle_point"`
+	MinePoint   int    `json:"mine_point"`
+	Status      string `json:"crabada_status"`
 }
