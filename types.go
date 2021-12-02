@@ -104,3 +104,21 @@ type GasData struct {
 type GasPrice struct {
 	Price float64 `json:"price"`
 }
+
+type CrabsResponse struct {
+	ErrorCode string      `json:"error_code"`
+	Message   string      `json:"message"`
+	Data      CrabsResult `json:"result"`
+}
+
+type CrabsResult struct {
+	TotalRecord int    `json:"totalRecord"`
+	Crabs       []Crab `json:"data"`
+}
+
+type Crab struct {
+	CrabadaID   int `json:"crabada_id"`
+	ID          int `json:"id"`
+	BattlePoint int `json:"battle_point"`
+	MinePoint   int `json:"mine_point"`
+}

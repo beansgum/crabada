@@ -40,7 +40,7 @@ func (et *etubot) settleGame(gameID int64) {
 		return
 	}
 
-	auth, err := et.txAuth(team.Wallet)
+	auth, err := et.txAuth(team.Wallet, false)
 	if err != nil {
 		et.sendError(fmt.Errorf("error creating tx auth: %v", err))
 		return
@@ -74,10 +74,62 @@ func (et *etubot) settleGame(gameID int64) {
 	}
 }
 
+func (et *etubot) reinforceAttacks() {
+	games, err := et.activeLoots()
+	if err != nil {
+		et.sendError(fmt.Errorf("error fetching active games:%v", err))
+		return
+	}
+
+	for _, game := range games {
+		if game.needsReinforcement() {
+			log.Infof("Reinforcing game #%d", game.ID)
+			var crabsResponse CrabsResponse
+			err = makeRequest(fmt.Sprintf(CrabsURL, game.AttackTeamOwner), &crabsResponse)
+			if err != nil {
+				log.Error("Error fetching available crabs:", err)
+				continue
+			}
+
+			if crabsResponse.ErrorCode != "" {
+				log.Infof("error fetching crabs: %s, message: %s", crabsResponse.ErrorCode, crabsResponse.Message)
+				continue
+			}
+
+			strengthNeeded := game.DefensePoint - game.AttackPoint
+			var chosenCrab *Crab
+			for _, crab := range crabsResponse.Data.Crabs {
+				if crab.BattlePoint >= strengthNeeded && (chosenCrab == nil || chosenCrab.BattlePoint > crab.BattlePoint) {
+					chosenCrab = &crab
+				}
+			}
+
+			if chosenCrab != nil {
+				auth, err := et.txAuth(game.AttackTeamOwner, false)
+				if err != nil {
+					et.sendError(fmt.Errorf("error creating tx auth: %v", err))
+					return
+				}
+
+				tx, err := et.idleContract.ReinforceAttack(auth, big.NewInt(game.ID), big.NewInt(int64(chosenCrab.CrabadaID)), big.NewInt(0))
+				if err != nil {
+					et.sendError(fmt.Errorf("error reinforcing defense: %v", err))
+					return
+				}
+
+				txt := fmt.Sprintf("Game #%d reinforced with strength %d, battle points: %d vs %d.\nhttps://snowtrace.io/tx/%s", game.ID, chosenCrab.BattlePoint, game.AttackPoint, game.DefensePoint, tx.Hash())
+				et.bot.Send(TelegramChat, txt, MsgSendOptions)
+			} else {
+				log.Infof("Cannot reinforce game #%d, no available crab", game.ID)
+			}
+		}
+	}
+}
+
 func (et *etubot) raid() {
 	teams, err := et.allTeams()
 	if err != nil {
-		et.sendError(fmt.Errorf("error finding teams team:%v", err))
+		et.sendError(fmt.Errorf("error finding all team:%v", err))
 		return
 	}
 
@@ -260,7 +312,7 @@ func (et *etubot) attack(game *Game, team *Team) error {
 	strengthDiff := team.Strength - game.DefensePoint
 	lg := fmt.Sprintf("Attacking %d using %d, strength advantage: %d.", game.ID, team.ID, strengthDiff)
 	log.Info(lg)
-	auth, err := et.txAuth(team.Wallet)
+	auth, err := et.txAuth(team.Wallet, true)
 	if err != nil {
 		return err
 	}

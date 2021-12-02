@@ -29,9 +29,9 @@ const (
 
 	TeamAvailable = "AVAILABLE"
 
-	PollURL  = "https://idle-api.crabada.com/public/idle/mines?page=1&status=open&looter_address=0xed3428bcc71d3b0a43bb50a64ed774bec57100a8&can_loot=1&limit=8"
 	LootURL  = "https://idle-api.crabada.com/public/idle/mines?looter_address=%s&page=1&status=open&limit=8"
 	TeamsURL = "https://idle-api.crabada.com/public/idle/teams?user_address=%s"
+	CrabsURL = "https://idle-api.crabada.com/public/idle/crabadas/can-join-team?user_address=%s"
 
 	GasAPI = "https://api.debank.com/chain/gas_price_dict_v2?chain=avax"
 )
@@ -44,6 +44,7 @@ var (
 	attackRegex = regexp.MustCompile(`\/attack (.+)`)
 
 	actionReinforceDefense = "reinforce-defense"
+	actionReinforceAttack  = "reinforce-attack"
 	actionAttack           = "attack"
 
 	processIntervals = 30 * time.Minute
@@ -201,7 +202,7 @@ func (et *etubot) start() {
 	// go et.watchStartGame()
 	// go et.queAttacks()
 	if et.isAuto {
-		// go et.auto()
+		go et.auto()
 	}
 	go et.gasUpdate()
 	b.Start()
@@ -214,7 +215,7 @@ func (et *etubot) sendError(err error) {
 	// et.bot.Send(TelegramChat, err.Error())
 }
 
-func (et *etubot) txAuth(address string) (*bind.TransactOpts, error) {
+func (et *etubot) txAuth(address string, addGas bool) (*bind.TransactOpts, error) {
 	nonce, err := et.client.PendingNonceAt(context.Background(), common.HexToAddress(address))
 	if err != nil {
 		return nil, fmt.Errorf("error getting nonce: %v", err)
@@ -235,7 +236,11 @@ func (et *etubot) txAuth(address string) (*bind.TransactOpts, error) {
 	auth.GasLimit = uint64(200000) // in units // TODO
 	// auth.GasPrice = big.NewInt(0).Add(gasPrice, big.NewInt(50000000000)) // add 30 gwei
 	et.gasMu.RLock()
-	auth.GasPrice = big.NewInt(0).Add(et.gasPrice, big.NewInt(30000000000))
+	if addGas {
+		auth.GasPrice = big.NewInt(0).Add(et.gasPrice, big.NewInt(30000000000))
+	} else {
+		auth.GasPrice = et.gasPrice
+	}
 	et.gasMu.RUnlock()
 	limit := big.NewInt(200000000000) //200gwei
 

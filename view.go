@@ -56,10 +56,18 @@ func (et *etubot) sendActiveLoots(msg *tb.Message) {
 		if len(game.Process) > 0 {
 			latestProcess := game.lastProcess()
 			var lastAction, status string
-			if latestProcess.Action == actionAttack {
-				lastAction = "attacked"
+			if latestProcess.Action == actionAttack || latestProcess.Action == actionReinforceAttack {
+
+				if latestProcess.Action == actionReinforceAttack {
+					lastAction = "reinforced"
+				} else {
+					lastAction = "attacked"
+				}
+
 				if time.Since(latestProcess.txTime()) > processIntervals {
 					status = "won"
+				} else if len(game.Process) == 6 { // game completed
+					status = "waiting to settle"
 				} else {
 					status = "waiting for opponent's reinforcement"
 				}

@@ -92,6 +92,7 @@ func (et *etubot) auto() {
 			// continue
 		} else {
 			et.settleAll(true)
+			et.reinforceAttacks()
 			et.raid()
 		}
 
