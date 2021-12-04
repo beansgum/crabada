@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"crypto/ecdsa"
 	"fmt"
 	"math/big"
@@ -94,7 +93,7 @@ func (et *etubot) start() {
 	et.privateKey[strings.ToLower("0xf91fF01b9EF0d83D0bBd89953d53504f099A3DFf")] = privateKey2
 
 	log.Info("Connecting to infura")
-	client, err := ethclient.Dial("https://api.avax.network/ext/bc/C/rpc")
+	client, err := ethclient.Dial("wss://speedy-nodes-nyc.moralis.io//avalanche/mainnet/ws")
 	if err != nil {
 		log.Error("ethclient:", err)
 		return
@@ -216,40 +215,26 @@ func (et *etubot) sendError(err error) {
 }
 
 func (et *etubot) txAuth(address string, addGas bool) (*bind.TransactOpts, error) {
-	nonce, err := et.client.PendingNonceAt(context.Background(), common.HexToAddress(address))
-	if err != nil {
-		return nil, fmt.Errorf("error getting nonce: %v", err)
-	}
-
-	// gasPrice, err := et.client.SuggestGasPrice(context.Background())
-	// if err != nil {
-	// 	return nil, err
-	// }
-
 	auth, err := bind.NewKeyedTransactorWithChainID(et.privateKey[strings.ToLower(address)], big.NewInt(43114))
 	if err != nil {
 		return nil, fmt.Errorf("error creating transactor: %v", err)
 	}
 
-	auth.Nonce = big.NewInt(int64(nonce))
+	limit := big.NewInt(210000000000) //210gwei
+
 	auth.Value = big.NewInt(0)     // in wei
-	auth.GasLimit = uint64(200000) // in units // TODO
-	// auth.GasPrice = big.NewInt(0).Add(gasPrice, big.NewInt(50000000000)) // add 30 gwei
+	auth.GasLimit = uint64(200000) // in units
 	et.gasMu.RLock()
 	if addGas {
-		auth.GasPrice = big.NewInt(0).Add(et.gasPrice, big.NewInt(30000000000))
+		auth.GasPrice = big.NewInt(0).Add(et.gasPrice, big.NewInt(110000000000)) //add 110 gwei
 	} else {
 		auth.GasPrice = et.gasPrice
 	}
 	et.gasMu.RUnlock()
-	limit := big.NewInt(200000000000) //200gwei
 
 	if auth.GasPrice.Cmp(limit) >= 0 {
-		// et.bot.Send(TelegramChat, "Cannot make transaction, gas is higher than 200gwei.")
 		return nil, fmt.Errorf("cannot make tx, gas too high")
 	}
-
-	log.Info("Using gas:", big.NewInt(0).Div(auth.GasPrice, big.NewInt(1e9)), auth.GasPrice.Cmp(limit))
 
 	return auth, nil
 }

@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/c-ollins/crabada/idlegame"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 )
 
@@ -21,59 +22,39 @@ func (et *etubot) gasUpdate() {
 }
 
 func (et *etubot) watchStartGame() {
-	for {
-		bestBlock, err := et.client.BlockNumber(context.Background())
-		if err != nil {
-			et.sendError(fmt.Errorf("error getting block number: %v", err))
-			return
-		}
+	watchOpts := &bind.WatchOpts{Context: context.Background(), Start: nil}
+	channel := make(chan *idlegame.IdlegameStartGame)
 
-		log.Info("Bestblock:", bestBlock)
-		filterOpts := &bind.FilterOpts{Context: context.Background(), Start: bestBlock}
-		gamesIter, err := et.idleContract.FilterStartGame(filterOpts)
-		if err != nil {
-			et.sendError(fmt.Errorf("error filtering start game: %v", err))
-			return
-		}
-
-		for gamesIter.Next() {
-			gameInfo, err := et.idleContract.GetGameBasicInfo(&bind.CallOpts{Context: context.Background()}, gamesIter.Event.GameId)
-			if err != nil {
-				et.sendError(fmt.Errorf("error getting game info: %v", err))
-				return
-			}
-
-			teamInfo, err := et.idleContract.GetTeamInfo(&bind.CallOpts{Context: context.Background()}, gamesIter.Event.TeamId)
-			if err != nil {
-				et.sendError(fmt.Errorf("error getting game info: %v", err))
-				return
-			}
-
-			gameAge := time.Since(time.Unix(int64(gameInfo.StartTime), 0)).Truncate(time.Second)
-
-			log.Info("Game:", gamesIter.Event.GameId, "Strength:", teamInfo.BattlePoint, "Start:", gameAge)
-		}
+	log.Info("Subscribing to contract")
+	sub, err := et.idleContract.WatchStartGame(watchOpts, channel)
+	if err != nil {
+		et.sendError(fmt.Errorf("error watching start game: %v", err))
+		return
 	}
-	// watchOpts := &bind.WatchOpts{Context: context.Background(), Start: nil}
-	// channel := make(chan *idlegame.IdlegameStartGame)
+	defer log.Info("unsub")
+	defer sub.Unsubscribe()
 
-	// // Start a goroutine which watches new events
-	// go func() {
-	// 	log.Info("Subscribing to contract")
-	// 	sub, err := et.idleContract.WatchStartGame(watchOpts, channel)
-	// 	if err != nil {
-	// 		et.sendError(fmt.Errorf("error watching start game: %v", err))
-	// 		return
-	// 	}
-	// 	defer sub.Unsubscribe()
-	// }()
+	log.Info("Watch start game")
+	for {
+		log.Info("Reading event")
+		event := <-channel
+		log.Infof("New game id: %d, team id: %d", event.GameId, event.TeamId)
+		gameInfo, err := et.idleContract.GetGameBasicInfo(&bind.CallOpts{Context: context.Background()}, event.GameId)
+		if err != nil {
+			et.sendError(fmt.Errorf("error getting game info: %v", err))
+			return
+		}
 
-	// log.Info("Watch start game")
+		teamInfo, err := et.idleContract.GetTeamInfo(&bind.CallOpts{Context: context.Background()}, event.TeamId)
+		if err != nil {
+			et.sendError(fmt.Errorf("error getting game info: %v", err))
+			return
+		}
 
-	// for {
-	// 	event := <-channel
-	// 	log.Infof("New game id: %d, team id: %d", event.GameId, event.TeamId)
-	// }
+		gameAge := time.Since(time.Unix(int64(gameInfo.StartTime), 0)).Truncate(time.Second)
+
+		log.Info("Game:", event.GameId, "Strength:", teamInfo.BattlePoint, "Start:", gameAge)
+	}
 }
 
 func (et *etubot) auto() {
