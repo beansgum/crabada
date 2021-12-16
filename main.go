@@ -226,7 +226,7 @@ func (et *etubot) txAuth(address string, addGas bool) (*bind.TransactOpts, error
 	auth.GasLimit = uint64(200000) // in units
 	et.gasMu.RLock()
 	if addGas {
-		auth.GasPrice = big.NewInt(0).Add(et.gasPrice, big.NewInt(110000000000)) //add 110 gwei
+		auth.GasPrice = big.NewInt(0).Add(et.gasPrice, big.NewInt(100000000000)) //add 100 gwei
 	} else {
 		auth.GasPrice = et.gasPrice
 	}

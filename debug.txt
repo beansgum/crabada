@@ -1,1 +1,2 @@
 truncate settle time
+get all data from contract

@@ -60,6 +60,7 @@ func (et *etubot) crabForID(crabID int64) (*Crab, error) {
 
 	return &response.Crab, nil
 }
+
 func (et *etubot) allTeams() ([]*Team, error) {
 	var teams []*Team
 	for i := 0; i < len(wallets); i++ {
@@ -289,7 +290,15 @@ func (et *etubot) pollGamesAndAttack(team *Team) {
 	defer sub.Unsubscribe()
 
 	for {
-		startGameEvent := <-channel
+		log.Info("Reading to contract channel")
+		var startGameEvent *idlegame.IdlegameStartGame
+		select {
+		case event := <-channel:
+			startGameEvent = event
+		case <-time.After(2 * time.Minute):
+			log.Info("Timeout reading from channel")
+			continue
+		}
 
 		callOpts := &bind.CallOpts{Context: context.Background()}
 
