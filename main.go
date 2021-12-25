@@ -41,21 +41,21 @@ var (
 
 	settleRegex = regexp.MustCompile(`\/settle (.+)`)
 	attackRegex = regexp.MustCompile(`\/attack (.+)`)
-
-	actionReinforceDefense = "reinforce-defense"
-	actionReinforceAttack  = "reinforce-attack"
-	actionAttack           = "attack"
+	watchRegex  = regexp.MustCompile(`\/watch (.+)`)
 
 	processIntervals = 30 * time.Minute
 
-	wallets = []string{"0xed3428BcC71d3B0a43Bb50a64ed774bEc57100a8", "0xf91fF01b9EF0d83D0bBd89953d53504f099A3DFf"}
+	reinforcementCrabs = make(map[string][]int64)
 )
 
 func main() {
+	reinforcementCrabs["0xed3428bcc71d3b0a43bb50a64ed774bec57100a8"] = []int64{8872, 8869, 8876, 8873, 8976, 8877}
+	reinforcementCrabs["0xf91ff01b9ef0d83d0bbd89953d53504f099a3dff"] = []int64{8874, 8870, 8871, 8875, 8363, 8881}
 	et := etubot{
 		isAuto:     true,
 		attackCh:   make(chan *Team, 5),
 		privateKey: make(map[string]*ecdsa.PrivateKey),
+		games:      make(map[int64]int),
 	}
 	et.start()
 }
@@ -72,6 +72,9 @@ type etubot struct {
 	client       *ethclient.Client
 	idleContract *idlegame.Idlegame
 	privateKey   map[string]*ecdsa.PrivateKey
+
+	games   map[int64]int
+	gamesMu sync.Mutex
 }
 
 func (et *etubot) start() {
@@ -139,11 +142,14 @@ func (et *etubot) start() {
 		case m.Text == "/loots":
 			go et.sendActiveLoots(m)
 			return
+		case m.Text == "/reinforce":
+			go et.reinforceAttacks()
+			return
 		case m.Text == "/settleall":
-			if et.isAuto {
-				et.bot.Send(TelegramChat, "cmd disabled in auto.")
-				return
-			}
+			// if et.isAuto {
+			// 	et.bot.Send(TelegramChat, "cmd disabled in auto.")
+			// 	return
+			// }
 			go et.settleAll(false)
 			return
 		case m.Text == "/teams":
@@ -188,6 +194,16 @@ func (et *etubot) start() {
 				et.attackCh <- team
 				b.Reply(m, fmt.Sprintf("Attacking using team #%d", team.ID))
 			}()
+		} else if matches := watchRegex.FindStringSubmatch(m.Text); len(matches) > 1 {
+			gameID, err := strconv.Atoi(matches[1])
+			if err != nil {
+				b.Reply(m, err.Error())
+				return
+			}
+
+			et.gamesMu.Lock()
+			et.games[int64(gameID)] = 1
+			et.gamesMu.Unlock()
 		}
 	})
 
@@ -200,6 +216,11 @@ func (et *etubot) start() {
 
 	// go et.watchStartGame()
 	// go et.queAttacks()
+	err = et.addActiveGames()
+	if err != nil {
+		log.Error(err)
+		return
+	}
 	if et.isAuto {
 		go et.auto()
 	}

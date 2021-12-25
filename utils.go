@@ -64,7 +64,6 @@ func makeRequest(url string, result interface{}) error {
 		return fmt.Errorf("error fetching contract listings: %v", err)
 	}
 
-	req.Header.Add("Accept", "application/json")
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("error fetching contract listings: %v", err)

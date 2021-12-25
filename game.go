@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"strings"
 	"time"
 
 	"github.com/c-ollins/crabada/idlegame"
@@ -12,72 +13,116 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
+func (et *etubot) addActiveGames() error {
+	teams, err := et.allTeams()
+	if err != nil {
+		return err
+	}
+
+	et.gamesMu.Lock()
+	defer et.gamesMu.Unlock()
+	for _, team := range teams {
+		if team.CurrentGameID != 0 {
+			et.games[team.CurrentGameID] = 1
+		}
+	}
+
+	return nil
+}
+
 func (et *etubot) activeLoots() ([]Game, error) {
 	var games []Game
-	for i := 0; i < len(wallets); i++ {
+	et.gamesMu.Lock()
+	defer et.gamesMu.Unlock()
+	for gameID, _ := range et.games {
+		callOpts := &bind.CallOpts{Context: context.Background()}
 
-		var response GamesResponse
-		err := makeRequest(fmt.Sprintf(LootURL, wallets[i]), &response)
+		gameInfo, err := et.idleContract.GetGameBasicInfo(callOpts, big.NewInt(gameID))
 		if err != nil {
-			log.Error("Error fetching active loots:", err)
-			return nil, err
+			return nil, fmt.Errorf("error fetching game battle info by id: %v", err)
 		}
 
-		if response.ErrorCode != "" {
-			return nil, fmt.Errorf("error fetching game by id: %s, message: %s", response.ErrorCode, response.Message)
+		oppTeamInfo, err := et.idleContract.GetTeamInfo(&bind.CallOpts{Context: context.Background()}, gameInfo.TeamId)
+		if err != nil {
+			return nil, fmt.Errorf("error fetching game team info by id: %v", err)
 		}
 
-		games = append(games, response.Games...)
+		battleInfo, err := et.idleContract.GetGameBattleInfo(callOpts, big.NewInt(gameID))
+		if err != nil {
+			return nil, fmt.Errorf("error fetching game battle info by id: %v", err)
+		}
+
+		myTeamInfo, err := et.idleContract.GetTeamInfo(&bind.CallOpts{Context: context.Background()}, battleInfo.AttackTeamId)
+		if err != nil {
+			return nil, fmt.Errorf("error fetching game team info by id: %v", err)
+		}
+
+		// log.Infof("Attack time: %d, last attack time: %d, last defense time %d", battleInfo.AttackTime, battleInfo.LastAttackTime, battleInfo.LastDefTime, battleInfo.LastDefTime > battleInfo.LastAttackTime)
+		// log.Infof("AttackID %d %d, Def Id %d, %d", battleInfo.AttackId1, battleInfo.AttackId2, battleInfo.DefId1.Int64(), battleInfo.DefId2.Int64())
+		game := Game{
+			ID:              gameID,
+			StartTime:       int64(gameInfo.StartTime),
+			DefensePoint:    int(oppTeamInfo.BattlePoint),
+			AttackPoint:     int(myTeamInfo.BattlePoint),
+			AttackTeamID:    battleInfo.AttackTeamId.Int64(),
+			AttackTeamOwner: myTeamInfo.Owner.String(),
+			BattleInfo:      (*BattleInfo)(&battleInfo),
+		}
+
+		games = append(games, game)
 	}
 
 	return games, nil
 }
 
+func (et *etubot) crabForID(crabID int64) (*Crab, error) {
+	callOpts := &bind.CallOpts{Context: context.Background()}
+
+	crab, err := et.idleContract.CrabaInfos(callOpts, big.NewInt(crabID))
+	if err != nil {
+		return nil, err
+	}
+
+	return (*Crab)(&crab), nil
+}
+
 func (et *etubot) crabIsAvailable(crabID int64) bool {
 	crab, err := et.crabForID(crabID)
 	if err != nil {
-		et.sendError(fmt.Errorf("error fetching crab: %v", err))
+		log.Errorf("Error fetching crabada info:", err)
 		return false
 	}
 
-	if crab.Status == "AVAILABLE" {
-		return true
-	}
-
-	return false
-}
-
-func (et *etubot) crabForID(crabID int64) (*Crab, error) {
-	var response CrabResponse
-	err := makeRequest(fmt.Sprintf("https://idle-api.crabada.com/public/idle/crabada/info/%d", crabID), &response)
-	if err != nil {
-		return nil, fmt.Errorf("error fetching game by id: %v", err)
-	}
-
-	if response.ErrorCode != "" {
-		return nil, fmt.Errorf("error fetching game by id: %s, message: %s", response.ErrorCode, response.Message)
-	}
-
-	return &response.Crab, nil
+	// log.Infof("Crab %d, lockto: %d, status: %d", crabID, crab.LockTo.Int64(), crab.Status.Int64())
+	return time.Since(time.Unix(crab.LockTo.Int64(), 0)) > 0 && crab.Status.Int64() == 0
 }
 
 func (et *etubot) allTeams() ([]*Team, error) {
+
+	teamIDs := []int64{2411, 2290, 2279, 2463, 2462, 2461}
+	callOpts := &bind.CallOpts{Context: context.Background()}
 	var teams []*Team
-	for i := 0; i < len(wallets); i++ {
-		var response TeamsResponse
-		err := makeRequest(fmt.Sprintf(TeamsURL, wallets[i]), &response)
+	for _, id := range teamIDs {
+		teamInfo, err := et.idleContract.GetTeamInfo(callOpts, big.NewInt(id))
 		if err != nil {
-			log.Error("Error fetching teams:", err)
-			return nil, err
+			log.Error("Error fetching team info:", err)
+			continue
 		}
 
-		if response.ErrorCode != "" {
-			return nil, fmt.Errorf("error fetching game by id: %s, message: %s", response.ErrorCode, response.Message)
+		status := "LOCK"
+		if time.Since(time.Unix(teamInfo.LockTo.Int64(), 0)) > 0 && teamInfo.CurrentGameId.Int64() == 0 {
+			status = "AVAILABLE"
 		}
 
-		if response.TotalRecord > 0 {
-			teams = append(teams, response.Teams...)
+		team := &Team{
+			ID:            id,
+			Strength:      int(teamInfo.BattlePoint),
+			Wallet:        teamInfo.Owner.String(),
+			Status:        status,
+			CurrentGameID: teamInfo.CurrentGameId.Int64(),
 		}
+
+		teams = append(teams, team)
 	}
 
 	return teams, nil
@@ -113,19 +158,25 @@ func (et *etubot) teamIsAvailable(teamID int64) bool {
 }
 
 func (et *etubot) findMyLootTeam(gameID int64) (*Team, error) {
-	var response GameResponse
-	err := makeRequest(fmt.Sprintf("https://idle-api.crabada.com/public/idle/mine/%d", gameID), &response)
+
+	callOpts := &bind.CallOpts{Context: context.Background()}
+
+	battleInfo, err := et.idleContract.GetGameBattleInfo(callOpts, big.NewInt(gameID))
 	if err != nil {
-		return nil, fmt.Errorf("error fetching game by id: %v", err)
+		return nil, fmt.Errorf("error fetching game battle info by id: %v", err)
 	}
 
-	if response.ErrorCode != "" {
-		return nil, fmt.Errorf("error fetching game by id: %s, message: %s", response.ErrorCode, response.Message)
+	myTeamInfo, err := et.idleContract.GetTeamInfo(callOpts, battleInfo.AttackTeamId)
+	if err != nil {
+		return nil, fmt.Errorf("error fetching game team info by id: %v", err)
 	}
 
 	// TODO: verify team
 
-	return &Team{ID: response.AttackTeamID, Strength: response.AttackPoint, Wallet: response.AttackTeamOwner}, nil
+	return &Team{
+		ID:       battleInfo.AttackTeamId.Int64(),
+		Strength: int(myTeamInfo.BattlePoint),
+		Wallet:   myTeamInfo.Owner.String()}, nil
 }
 
 func (et *etubot) settleAll(isAuto bool) {
@@ -187,11 +238,15 @@ func (et *etubot) settleGame(gameID int64) {
 			continue
 		}
 		et.bot.Send(TelegramChat, fmt.Sprintf("Game #%d Team #%d has been settled.\nhttps://snowtrace.io/tx/%s", gameID, team.ID, tx.Hash().String()), MsgSendOptions)
+		et.gamesMu.Lock()
+		delete(et.games, gameID)
+		et.gamesMu.Unlock()
 		break
 	}
 }
 
 func (et *etubot) reinforceAttacks() {
+	log.Info("reinfocing")
 	games, err := et.activeLoots()
 	if err != nil {
 		et.sendError(fmt.Errorf("error fetching active games:%v", err))
@@ -201,48 +256,44 @@ func (et *etubot) reinforceAttacks() {
 	for _, game := range games {
 		if game.needsReinforcement() {
 
-			var crabsResponse CrabsResponse
-			err = makeRequest(fmt.Sprintf(CrabsURL, game.AttackTeamOwner), &crabsResponse)
+			attackTeam := strings.ToLower(game.AttackTeamOwner)
+			attackTeamCrabs := reinforcementCrabs[attackTeam]
+
+			for _, crabID := range attackTeamCrabs {
+				log.Info("available: ", et.crabIsAvailable(crabID))
+			}
+
+			strengthNeeded, err := game.requiredReinforceStrength(et)
 			if err != nil {
-				log.Error("Error fetching available crabs:", err)
+				log.Info("Error getting strength needed")
 				continue
 			}
 
-			if crabsResponse.ErrorCode != "" {
-				log.Infof("error fetching crabs: %s, message: %s", crabsResponse.ErrorCode, crabsResponse.Message)
+			if strengthNeeded > 220 {
 				continue
 			}
 
-			strengthNeeded := game.DefensePoint - game.AttackPoint
-			var chosenCrab *Crab
-			for _, crab := range crabsResponse.Data.Crabs {
-				if crab.BattlePoint >= strengthNeeded && (chosenCrab == nil || chosenCrab.BattlePoint > crab.BattlePoint) {
-					if et.crabIsAvailable(int64(crab.CrabadaID)) {
-						chosenCrab = &crab
-					} else {
-						log.Infof("Tried to pick crab %d for game %d but not available", crab.CrabadaID, game.ID)
-					}
+			for _, crabID := range attackTeamCrabs {
+				if !et.crabIsAvailable(crabID) {
+					continue
 				}
-			}
 
-			if chosenCrab != nil {
-				log.Infof("Reinforcing game #%d using crab #%d", game.ID, chosenCrab.ID)
+				log.Infof("Reinforcing game #%d using crab #%d", game.ID, crabID)
 				auth, err := et.txAuth(game.AttackTeamOwner, false)
 				if err != nil {
 					et.sendError(fmt.Errorf("error creating tx auth: %v", err))
 					return
 				}
 
-				tx, err := et.idleContract.ReinforceAttack(auth, big.NewInt(game.ID), big.NewInt(int64(chosenCrab.CrabadaID)), big.NewInt(0))
+				tx, err := et.idleContract.ReinforceAttack(auth, big.NewInt(game.ID), big.NewInt(int64(crabID)), big.NewInt(0))
 				if err != nil {
 					et.sendError(fmt.Errorf("error reinforcing defense: %v", err))
 					return
 				}
 
-				txt := fmt.Sprintf("Game #%d reinforced with strength %d, battle points: %d vs %d.\nhttps://snowtrace.io/tx/%s", game.ID, chosenCrab.BattlePoint, chosenCrab.BattlePoint+game.AttackPoint, game.DefensePoint, tx.Hash())
+				txt := fmt.Sprintf("Game #%d reinforced with strength 220, battle points: %d vs %d.\nhttps://snowtrace.io/tx/%s", game.ID, 220+game.AttackPoint, game.DefensePoint, tx.Hash())
 				et.bot.Send(TelegramChat, txt, MsgSendOptions)
-			} else {
-				log.Infof("Cannot reinforce game #%d, no available crab", game.ID)
+				break
 			}
 		}
 	}
@@ -254,6 +305,8 @@ func (et *etubot) raid() {
 		et.sendError(fmt.Errorf("error finding all team:%v", err))
 		return
 	}
+
+	log.Info("got teams", len(teams))
 
 	queue := 0
 	for _, team := range teams {
@@ -331,6 +384,10 @@ func (et *etubot) pollGamesAndAttack(team *Team) {
 				log.Error("error attacking:", err)
 				continue
 			}
+
+			et.gamesMu.Lock()
+			et.games[targetGame.ID] = 1
+			et.gamesMu.Unlock()
 			break
 		}
 	}

@@ -53,35 +53,41 @@ func (et *etubot) sendActiveLoots(msg *tb.Message) {
 		lootSummary += fmt.Sprintf("Game: %d\n", game.ID)
 		lootSummary += fmt.Sprintf("Team: %d\n", game.AttackTeamID)
 		lootSummary += fmt.Sprintf("Account: %s\n", game.AttackTeamOwner[:7])
-		if len(game.Process) > 0 {
-			latestProcess := game.lastProcess()
-			var lastAction, status string
-			if latestProcess.Action == actionAttack || latestProcess.Action == actionReinforceAttack {
 
-				if latestProcess.Action == actionReinforceAttack {
-					lastAction = "reinforced"
-				} else {
-					lastAction = "attacked"
-				}
-
-				if time.Since(latestProcess.txTime()) > processIntervals {
-					status = "won"
-				} else if len(game.Process) == 6 { // game completed
-					status = "waiting to settle"
-				} else {
-					status = "waiting for opponent's reinforcement"
-				}
-			} else if latestProcess.Action == actionReinforceDefense {
-				lastAction = "opponent reinforced"
-				if time.Since(latestProcess.txTime()) > processIntervals {
-					status = "lost"
-				} else {
-					status = fmt.Sprintf("%d reinforcement needed", game.DefensePoint-game.AttackPoint)
-				}
-			}
-			lootSummary += fmt.Sprintf("Last action: %s\n", lastAction)
-			lootSummary += fmt.Sprintf("Status: %s\n", status)
+		var lastAction, status string
+		lastAction = "attacked"
+		status = "waiting for opponent's reinforcement"
+		if time.Since(game.lastAttackTime()) > processIntervals {
+			status = "won"
 		}
+
+		if game.reinforceAttackCount() > game.reinforceDefenseCount() {
+			lastAction = "reinforced"
+
+			if time.Since(game.lastAttackTime()) > processIntervals {
+				status = "won"
+			} else if game.reinforceAttackCount() == 2 { // game completed
+				status = "waiting to settle"
+			} else {
+				status = "waiting for opponent's reinforcement"
+			}
+
+		} else if game.reinforceDefenseCount() > game.reinforceAttackCount() {
+			lastAction = "opponent reinforced"
+			if time.Since(game.lastAttackTime()) > processIntervals {
+				status = "lost"
+			} else {
+				reinforceStrength, err := game.requiredReinforceStrength(et)
+				if err != nil {
+					log.Info("Error getting reinforcement strength")
+					return
+				}
+				status = fmt.Sprintf("%d reinforcement needed", reinforceStrength)
+			}
+		}
+
+		lootSummary += fmt.Sprintf("Last action: %s\n", lastAction)
+		lootSummary += fmt.Sprintf("Status: %s\n", status)
 		if game.canSettle() {
 			lootSummary += "Ready: yes\n"
 		} else {

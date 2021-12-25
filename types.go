@@ -1,6 +1,13 @@
 package main
 
-import "time"
+import (
+	"context"
+	"math/big"
+	"time"
+
+	"github.com/ethereum/go-ethereum/accounts/abi/bind"
+	"github.com/ethereum/go-ethereum/common"
+)
 
 type TeamsResponse struct {
 	ErrorCode  string `json:"error_code"`
@@ -14,10 +21,11 @@ type TeamResult struct {
 }
 
 type Team struct {
-	ID       int64  `json:"team_id"`
-	Strength int    `json:"battle_point"`
-	Wallet   string `json:"owner"`
-	Status   string `json:"status"` //AVAILABLE/LOCK
+	ID            int64  `json:"team_id"`
+	Strength      int    `json:"battle_point"`
+	Wallet        string `json:"owner"`
+	Status        string `json:"status"` //AVAILABLE/LOCK
+	CurrentGameID int64
 }
 
 type GamesResponse struct {
@@ -38,15 +46,25 @@ type GamesResult struct {
 }
 
 type Game struct {
-	ID              int64         `json:"game_id"`
-	StartTime       int64         `json:"start_time"`
-	EndTime         int64         `json:"end_time"`
-	DefensePoint    int           `json:"defense_point"`
-	AttackPoint     int           `json:"attack_point"`
-	AttackTeamID    int64         `json:"attack_team_id"`
-	AttackTeamOwner string        `json:"attack_team_owner"`
-	WinnerTeamID    string        `json:"winner_team_id"`
+	ID              int64  `json:"game_id"`
+	StartTime       int64  `json:"start_time"`
+	DefensePoint    int    `json:"defense_point"`
+	AttackPoint     int    `json:"attack_point"`
+	AttackTeamID    int64  `json:"attack_team_id"`
+	AttackTeamOwner string `json:"attack_team_owner"`
+	BattleInfo      *BattleInfo
 	Process         []GameProcess `json:"process"`
+}
+
+type BattleInfo struct {
+	AttackTeamId   *big.Int
+	AttackTime     uint32
+	LastAttackTime uint32
+	LastDefTime    uint32
+	AttackId1      *big.Int
+	AttackId2      *big.Int
+	DefId1         *big.Int
+	DefId2         *big.Int
 }
 
 func (g Game) startTime() time.Time {
@@ -58,29 +76,68 @@ func (g Game) settleTime() time.Time {
 }
 
 func (g Game) isWonOrLost() bool {
-	latestProcess := g.lastProcess()
-
 	// true if  the enemy did not reinforce or we did not reattack a reinforcement in time
-	return time.Since(latestProcess.txTime()) > processIntervals || len(g.Process) == 6
+	return time.Since(g.lastProcessTime()) > processIntervals || g.reinforceAttackCount() == 2
 }
 
 func (g Game) canSettle() bool {
 	return g.isWonOrLost() && time.Now().After(g.settleTime())
 }
 
-func (g Game) lastProcess() GameProcess {
-	return g.Process[len(g.Process)-1]
+func (g Game) lastProcessTime() time.Time {
+	if g.reinforceAttackCount() > g.reinforceDefenseCount() {
+		return g.lastAttackTime()
+	}
+
+	return g.lastDefenseTime()
+}
+
+func (g Game) requiredReinforceStrength(et *etubot) (int64, error) {
+
+	statsInfo, err := et.idleContract.GetLootingStatsInfo(&bind.CallOpts{Context: context.Background()}, big.NewInt(g.ID))
+	if err != nil {
+		return 0, err
+	}
+
+	return int64(statsInfo.DefensePoint) - int64(statsInfo.AttackPoint), nil
+}
+
+func (g Game) reinforceAttackCount() int {
+	count := 0
+	if g.BattleInfo.AttackId1.Int64() != 0 {
+		count++
+	}
+
+	if g.BattleInfo.AttackId2.Int64() != 0 {
+		count++
+	}
+
+	return count
+}
+
+func (g Game) lastAttackTime() time.Time {
+	return time.Unix(int64(g.BattleInfo.LastAttackTime), 0)
+}
+
+func (g Game) reinforceDefenseCount() int {
+	count := 0
+	if g.BattleInfo.DefId1.Int64() != 0 {
+		count++
+	}
+
+	if g.BattleInfo.DefId2.Int64() != 0 {
+		count++
+	}
+
+	return count
+}
+
+func (g Game) lastDefenseTime() time.Time {
+	return time.Unix(int64(g.BattleInfo.LastDefTime), 0)
 }
 
 func (g Game) needsReinforcement() bool {
-	latestProcess := g.lastProcess()
-	if latestProcess.Action == actionReinforceDefense {
-		if time.Since(latestProcess.txTime()) < processIntervals {
-			return true
-		}
-	}
-
-	return false
+	return g.lastDefenseTime().After(g.lastAttackTime()) && time.Since(g.lastDefenseTime()) < processIntervals
 }
 
 type GameProcess struct {
@@ -88,8 +145,10 @@ type GameProcess struct {
 	TxTime int64  `json:"transaction_time"`
 }
 
-func (gp GameProcess) txTime() time.Time {
-	return time.Unix(gp.TxTime, 0)
+type Crab struct {
+	Owner  common.Address
+	LockTo *big.Int
+	Status *big.Int
 }
 
 type GasResponse struct {
@@ -103,29 +162,4 @@ type GasData struct {
 
 type GasPrice struct {
 	Price float64 `json:"price"`
-}
-
-type CrabsResponse struct {
-	ErrorCode string      `json:"error_code"`
-	Message   string      `json:"message"`
-	Data      CrabsResult `json:"result"`
-}
-
-type CrabsResult struct {
-	TotalRecord int    `json:"totalRecord"`
-	Crabs       []Crab `json:"data"`
-}
-
-type CrabResponse struct {
-	ErrorCode string `json:"error_code"`
-	Message   string `json:"message"`
-	Crab      `json:"result"`
-}
-
-type Crab struct {
-	CrabadaID   int    `json:"crabada_id"`
-	ID          int    `json:"id"`
-	BattlePoint int    `json:"battle_point"`
-	MinePoint   int    `json:"mine_point"`
-	Status      string `json:"crabada_status"`
 }

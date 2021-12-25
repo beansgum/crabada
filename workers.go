@@ -58,7 +58,7 @@ func (et *etubot) watchStartGame() {
 }
 
 func (et *etubot) auto() {
-	et.bot.Send(TelegramChat, "Etubot running on auto.")
+	// et.bot.Send(TelegramChat, "Etubot running on auto.")
 	for {
 		log.Info("Auto running")
 		// settle ready games
@@ -73,7 +73,7 @@ func (et *etubot) auto() {
 			// continue
 		} else {
 			et.settleAll(true)
-			et.reinforceAttacks()
+			// et.reinforceAttacks()
 			et.raid()
 		}
 
