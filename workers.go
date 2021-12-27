@@ -58,22 +58,26 @@ func (et *etubot) watchStartGame() {
 }
 
 func (et *etubot) auto() {
-	// et.bot.Send(TelegramChat, "Etubot running on auto.")
+	et.bot.Send(TelegramChat, "Etubot running on auto.")
 	for {
 		log.Info("Auto running")
 		// settle ready games
 
 		et.gasMu.RLock()
-		gasPrice := big.NewInt(0).Add(et.gasPrice, big.NewInt(30000000000))
+		gasPrice := et.gasPrice
+		raidGas := big.NewInt(0).Add(et.gasPrice, big.NewInt(100000000000))
 		et.gasMu.RUnlock()
-		limit := big.NewInt(200000000000) //200gwei
+		limit := big.NewInt(210000000000) //200gwei
 
 		if gasPrice.Cmp(limit) >= 0 {
 			// notify high gas
 			// continue
 		} else {
 			et.settleAll(true)
-			// et.reinforceAttacks()
+			et.reinforceAttacks()
+		}
+
+		if !(raidGas.Cmp(limit) >= 0) {
 			et.raid()
 		}
 

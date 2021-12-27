@@ -20,17 +20,11 @@ import (
 )
 
 const (
-	InternalServerError = "INTERNAL_SERVER_ERROR"
-
 	IdleContractAddress = "0x82a85407BD612f52577909F4A58bfC6873f14DA8"
 
 	TelegramChatID = 0
 
 	TeamAvailable = "AVAILABLE"
-
-	LootURL  = "https://idle-api.crabada.com/public/idle/mines?looter_address=%s&page=1&status=open&limit=8"
-	TeamsURL = "https://idle-api.crabada.com/public/idle/teams?user_address=%s"
-	CrabsURL = "https://idle-api.crabada.com/public/idle/crabadas/can-join-team?user_address=%s"
 
 	GasAPI = "https://api.debank.com/chain/gas_price_dict_v2?chain=avax"
 )
@@ -146,10 +140,10 @@ func (et *etubot) start() {
 			go et.reinforceAttacks()
 			return
 		case m.Text == "/settleall":
-			// if et.isAuto {
-			// 	et.bot.Send(TelegramChat, "cmd disabled in auto.")
-			// 	return
-			// }
+			if et.isAuto {
+				et.bot.Send(TelegramChat, "cmd disabled in auto.")
+				return
+			}
 			go et.settleAll(false)
 			return
 		case m.Text == "/teams":
