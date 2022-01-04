@@ -45,6 +45,7 @@ var (
 func main() {
 	reinforcementCrabs["0xed3428bcc71d3b0a43bb50a64ed774bec57100a8"] = []int64{8872, 8869, 8876, 8873, 8976, 8877}
 	reinforcementCrabs["0xf91ff01b9ef0d83d0bbd89953d53504f099a3dff"] = []int64{8874, 8870, 8871, 8875, 8363, 8881}
+	reinforcementCrabs["0x303de8234c60c146902f3e6f340722e41595667b"] = []int64{9390, 9637, 9393, 9387, 2584}
 	et := etubot{
 		isAuto:     true,
 		attackCh:   make(chan *Team, 5),
@@ -80,14 +81,21 @@ func (et *etubot) start() {
 		log.Error(err)
 		return
 	}
-	et.privateKey[strings.ToLower("0xed3428BcC71d3B0a43Bb50a64ed774bEc57100a8")] = privateKey
+	et.privateKey["0xed3428bcc71d3b0a43bb50a64ed774bec57100a8"] = privateKey
 
 	privateKey2, err := crypto.HexToECDSA(os.Getenv("BOT_PRIVATE2"))
 	if err != nil {
 		log.Error(err)
 		return
 	}
-	et.privateKey[strings.ToLower("0xf91fF01b9EF0d83D0bBd89953d53504f099A3DFf")] = privateKey2
+	et.privateKey["0xf91ff01b9ef0d83d0bbd89953d53504f099a3dff"] = privateKey2
+
+	privateKey3, err := crypto.HexToECDSA(os.Getenv("BOT_PRIVATE3"))
+	if err != nil {
+		log.Error(err)
+		return
+	}
+	et.privateKey["0x303de8234c60c146902f3e6f340722e41595667b"] = privateKey3
 
 	log.Info("Connecting to infura")
 	client, err := ethclient.Dial("wss://speedy-nodes-nyc.moralis.io//avalanche/mainnet/ws")

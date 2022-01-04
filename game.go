@@ -99,7 +99,7 @@ func (et *etubot) crabIsAvailable(crabID int64) bool {
 
 func (et *etubot) allTeams() ([]*Team, error) {
 
-	teamIDs := []int64{2411, 2290, 2279, 2463, 2462, 2461}
+	teamIDs := []int64{2411, 2290, 2279, 2463, 2462, 2461, 4609, 4608, 4607}
 	callOpts := &bind.CallOpts{Context: context.Background()}
 	var teams []*Team
 	for _, id := range teamIDs {
@@ -259,10 +259,6 @@ func (et *etubot) reinforceAttacks() {
 			attackTeam := strings.ToLower(game.AttackTeamOwner)
 			attackTeamCrabs := reinforcementCrabs[attackTeam]
 
-			for _, crabID := range attackTeamCrabs {
-				log.Info("available: ", et.crabIsAvailable(crabID))
-			}
-
 			strengthNeeded, err := game.requiredReinforceStrength(et)
 			if err != nil {
 				log.Info("Error getting strength needed")
@@ -275,6 +271,10 @@ func (et *etubot) reinforceAttacks() {
 
 			for _, crabID := range attackTeamCrabs {
 				if !et.crabIsAvailable(crabID) {
+					continue
+				}
+
+				if strengthNeeded > 206 && crabID == 2584 {
 					continue
 				}
 
