@@ -97,24 +97,11 @@ func (et *etubot) start() {
 	}
 	et.privateKey["0x303de8234c60c146902f3e6f340722e41595667b"] = privateKey3
 
-	log.Info("Connecting to infura")
-	client, err := ethclient.Dial("wss://speedy-nodes-nyc.moralis.io//avalanche/mainnet/ws")
+	err = et.connect()
 	if err != nil {
-		log.Error("ethclient:", err)
+		log.Errorf("error connecting: %v", err)
 		return
 	}
-	et.client = client
-
-	log.Info("Connected to infura")
-
-	address := common.HexToAddress(IdleContractAddress)
-	idleContract, err := idlegame.NewIdlegame(address, client)
-	if err != nil {
-		log.Error(err)
-		return
-	}
-
-	et.idleContract = idleContract
 
 	b, err := tb.NewBot(tb.Settings{
 		Token:  "",
@@ -130,6 +117,9 @@ func (et *etubot) start() {
 		switch {
 		case m.Text == "/ping":
 			b.Reply(m, "pong!")
+			return
+		case m.Text == "/reconnect":
+			go et.reconnect()
 			return
 		case m.Text == "/gas":
 			go et.gas(m)
@@ -230,6 +220,34 @@ func (et *etubot) start() {
 	b.Start()
 
 	select {}
+}
+
+func (et *etubot) reconnect() {
+	et.client.Close()
+	err := et.connect()
+	if err != nil {
+		et.bot.Send(TelegramChat, fmt.Sprintf("error reconnecting: %v", err))
+	}
+}
+
+func (et *etubot) connect() error {
+	log.Info("Connecting to infura")
+	client, err := ethclient.Dial("wss://speedy-nodes-nyc.moralis.io//avalanche/mainnet/ws")
+	if err != nil {
+		return err
+	}
+	et.client = client
+
+	log.Info("Connected to infura")
+
+	address := common.HexToAddress(IdleContractAddress)
+	idleContract, err := idlegame.NewIdlegame(address, client)
+	if err != nil {
+		return err
+	}
+
+	et.idleContract = idleContract
+	return nil
 }
 
 func (et *etubot) sendError(err error) {
