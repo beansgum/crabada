@@ -65,7 +65,7 @@ func (et *etubot) auto() {
 
 		et.gasMu.RLock()
 		gasPrice := et.gasPrice
-		raidGas := big.NewInt(0).Add(et.gasPrice, big.NewInt(100000000000))
+		raidGas := big.NewInt(0).Add(et.gasPrice, big.NewInt(80000000000))
 		et.gasMu.RUnlock()
 		limit := big.NewInt(210000000000) //200gwei
 

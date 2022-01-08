@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/c-ollins/crabada/crabcaller"
 	"github.com/c-ollins/crabada/idlegame"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
@@ -66,6 +67,7 @@ type etubot struct {
 
 	client       *ethclient.Client
 	idleContract *idlegame.Idlegame
+	crabCaller   *crabcaller.Crabcaller
 	privateKey   map[string]*ecdsa.PrivateKey
 
 	games   map[int64]int
@@ -240,12 +242,19 @@ func (et *etubot) connect() error {
 
 	log.Info("Connected to infura")
 
-	address := common.HexToAddress(IdleContractAddress)
-	idleContract, err := idlegame.NewIdlegame(address, client)
+	crabadaAddress := common.HexToAddress(IdleContractAddress)
+	idleContract, err := idlegame.NewIdlegame(crabadaAddress, client)
 	if err != nil {
 		return err
 	}
 
+	crabCallerAddress := common.HexToAddress("0x7cb4954b7c1d8830c6eb95973f0181ff741b92b3")
+	crabCaller, err := crabcaller.NewCrabcaller(crabCallerAddress, client)
+	if err != nil {
+		return err
+	}
+
+	et.crabCaller = crabCaller
 	et.idleContract = idleContract
 	return nil
 }
@@ -267,7 +276,7 @@ func (et *etubot) txAuth(address string, addGas bool) (*bind.TransactOpts, error
 	auth.GasLimit = uint64(200000) // in units
 	et.gasMu.RLock()
 	if addGas {
-		auth.GasPrice = big.NewInt(0).Add(et.gasPrice, big.NewInt(100000000000)) //add 100 gwei
+		auth.GasPrice = big.NewInt(0).Add(et.gasPrice, big.NewInt(80000000000)) //add 80 gwei
 	} else {
 		auth.GasPrice = et.gasPrice
 	}

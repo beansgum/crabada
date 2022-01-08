@@ -37,14 +37,9 @@ func (et *etubot) activeLoots() ([]Game, error) {
 	for gameID, _ := range et.games {
 		callOpts := &bind.CallOpts{Context: context.Background()}
 
-		gameInfo, err := et.idleContract.GetGameBasicInfo(callOpts, big.NewInt(gameID))
+		activeGameInfo, err := et.crabCaller.GetActiveGameInfo(callOpts, big.NewInt(gameID))
 		if err != nil {
-			return nil, fmt.Errorf("error fetching game battle info by id: %v", err)
-		}
-
-		oppTeamInfo, err := et.idleContract.GetTeamInfo(&bind.CallOpts{Context: context.Background()}, gameInfo.TeamId)
-		if err != nil {
-			return nil, fmt.Errorf("error fetching game team info by id: %v", err)
+			return nil, fmt.Errorf("error fetching active game info: %v", err)
 		}
 
 		battleInfo, err := et.idleContract.GetGameBattleInfo(callOpts, big.NewInt(gameID))
@@ -52,20 +47,13 @@ func (et *etubot) activeLoots() ([]Game, error) {
 			return nil, fmt.Errorf("error fetching game battle info by id: %v", err)
 		}
 
-		myTeamInfo, err := et.idleContract.GetTeamInfo(&bind.CallOpts{Context: context.Background()}, battleInfo.AttackTeamId)
-		if err != nil {
-			return nil, fmt.Errorf("error fetching game team info by id: %v", err)
-		}
-
-		// log.Infof("Attack time: %d, last attack time: %d, last defense time %d", battleInfo.AttackTime, battleInfo.LastAttackTime, battleInfo.LastDefTime, battleInfo.LastDefTime > battleInfo.LastAttackTime)
-		// log.Infof("AttackID %d %d, Def Id %d, %d", battleInfo.AttackId1, battleInfo.AttackId2, battleInfo.DefId1.Int64(), battleInfo.DefId2.Int64())
 		game := Game{
 			ID:              gameID,
-			StartTime:       int64(gameInfo.StartTime),
-			DefensePoint:    int(oppTeamInfo.BattlePoint),
-			AttackPoint:     int(myTeamInfo.BattlePoint),
+			StartTime:       int64(activeGameInfo.StartTime),
+			DefensePoint:    int(activeGameInfo.DefBattlePoint),
+			AttackPoint:     int(activeGameInfo.AtkBattlePoint),
 			AttackTeamID:    battleInfo.AttackTeamId.Int64(),
-			AttackTeamOwner: myTeamInfo.Owner.String(),
+			AttackTeamOwner: activeGameInfo.AttackTeamId.String(),
 			BattleInfo:      (*BattleInfo)(&battleInfo),
 		}
 
@@ -102,28 +90,31 @@ func (et *etubot) allTeams() ([]*Team, error) {
 	teamIDs := []int64{2411, 2290, 2279, 2463, 2462, 2461, 4609, 4608, 4607}
 	callOpts := &bind.CallOpts{Context: context.Background()}
 	var teams []*Team
-	for _, id := range teamIDs {
-		teamInfo, err := et.idleContract.GetTeamInfo(callOpts, big.NewInt(id))
-		if err != nil {
-			log.Error("Error fetching team info:", err)
-			continue
-		}
+	startTime := time.Now()
 
+	teamInfos, err := et.crabCaller.GetTeamInfos(callOpts, []*big.Int{big.NewInt(2411),
+		big.NewInt(2290), big.NewInt(2279), big.NewInt(2463), big.NewInt(2462), big.NewInt(2461), big.NewInt(4609), big.NewInt(4608), big.NewInt(4607)})
+	if err != nil {
+		return nil, err
+	}
+	for i, id := range teamIDs {
 		status := "LOCK"
-		if time.Since(time.Unix(teamInfo.LockTo.Int64(), 0)) > 0 && teamInfo.CurrentGameId.Int64() == 0 {
+		if time.Since(time.Unix(teamInfos.LockTos[i].Int64(), 0)) > 0 && teamInfos.CurrentGameIds[i].Int64() == 0 {
 			status = "AVAILABLE"
 		}
 
 		team := &Team{
 			ID:            id,
-			Strength:      int(teamInfo.BattlePoint),
-			Wallet:        teamInfo.Owner.String(),
+			Strength:      int(teamInfos.BattlePoints[i]),
+			Wallet:        teamInfos.TeamOwners[i].String(),
 			Status:        status,
-			CurrentGameID: teamInfo.CurrentGameId.Int64(),
+			CurrentGameID: teamInfos.CurrentGameIds[i].Int64(),
 		}
 
 		teams = append(teams, team)
 	}
+
+	log.Info("Got teams in:", time.Since(startTime))
 
 	return teams, nil
 }
@@ -161,22 +152,17 @@ func (et *etubot) findMyLootTeam(gameID int64) (*Team, error) {
 
 	callOpts := &bind.CallOpts{Context: context.Background()}
 
-	battleInfo, err := et.idleContract.GetGameBattleInfo(callOpts, big.NewInt(gameID))
+	myTeamInfo, err := et.crabCaller.GetAttackTeam(callOpts, big.NewInt(gameID))
 	if err != nil {
-		return nil, fmt.Errorf("error fetching game battle info by id: %v", err)
-	}
-
-	myTeamInfo, err := et.idleContract.GetTeamInfo(callOpts, battleInfo.AttackTeamId)
-	if err != nil {
-		return nil, fmt.Errorf("error fetching game team info by id: %v", err)
+		return nil, fmt.Errorf("error fetching game attack team info: %v", err)
 	}
 
 	// TODO: verify team
 
 	return &Team{
-		ID:       battleInfo.AttackTeamId.Int64(),
+		ID:       myTeamInfo.AttackTeamId.Int64(),
 		Strength: int(myTeamInfo.BattlePoint),
-		Wallet:   myTeamInfo.Owner.String()}, nil
+		Wallet:   myTeamInfo.AttackTeamId.String()}, nil
 }
 
 func (et *etubot) settleAll(isAuto bool) {
@@ -353,27 +339,22 @@ func (et *etubot) pollGamesAndAttack(team *Team) {
 			continue
 		}
 
+		startTime := time.Now()
 		callOpts := &bind.CallOpts{Context: context.Background()}
 
-		gameInfo, err := et.idleContract.GetGameBasicInfo(callOpts, startGameEvent.GameId)
-		if err != nil {
-			et.sendError(fmt.Errorf("error getting game info: %v", err))
-			return
-		}
-
-		teamInfo, err := et.idleContract.GetTeamInfo(callOpts, startGameEvent.TeamId)
+		gameInfo, err := et.crabCaller.GetGameDefTeamInfo(callOpts, startGameEvent.GameId)
 		if err != nil {
 			et.sendError(fmt.Errorf("error getting game info: %v", err))
 			return
 		}
 
 		gameAge := time.Since(time.Unix(int64(gameInfo.StartTime), 0))
-		strengthDiff := team.Strength - int(teamInfo.BattlePoint)
+		strengthDiff := team.Strength - int(gameInfo.BattlePoint)
 		if strengthDiff >= 20 && gameAge < (3*time.Second) {
-			targetGame := &Game{ID: startGameEvent.GameId.Int64(), DefensePoint: int(teamInfo.BattlePoint), StartTime: int64(gameInfo.StartTime)}
+			targetGame := &Game{ID: startGameEvent.GameId.Int64(), DefensePoint: int(gameInfo.BattlePoint), StartTime: int64(gameInfo.StartTime)}
 			go log.Infof("Game: %d, opponent strength: %d, team strength: %d, start time:%s", targetGame.ID, targetGame.DefensePoint, team.Strength, time.Since(time.Unix(targetGame.StartTime, 0)).Truncate(time.Second))
 
-			err = et.attack(targetGame, team)
+			err = et.attack(targetGame, team, startTime)
 			if err != nil {
 				errorCount++
 				if errorCount >= 3 {
@@ -393,7 +374,7 @@ func (et *etubot) pollGamesAndAttack(team *Team) {
 	}
 }
 
-func (et *etubot) attack(game *Game, team *Team) error {
+func (et *etubot) attack(game *Game, team *Team, startTime time.Time) error {
 
 	strengthDiff := team.Strength - game.DefensePoint
 	go log.Infof("Attacking %d using %d, strength advantage: %d.", game.ID, team.ID, strengthDiff)
@@ -402,6 +383,7 @@ func (et *etubot) attack(game *Game, team *Team) error {
 		return err
 	}
 
+	log.Info("Attacking after %s", time.Since(startTime))
 	tx, err := et.idleContract.Attack(auth, big.NewInt(game.ID), big.NewInt(team.ID))
 	if err != nil {
 		return err
