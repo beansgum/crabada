@@ -16,7 +16,7 @@ import (
 func (et *etubot) addActiveGames() error {
 	teams, err := et.allTeams()
 	if err != nil {
-		return err
+		return fmt.Errorf("error fetching all teams: %v", err)
 	}
 
 	et.gamesMu.Lock()
@@ -53,7 +53,7 @@ func (et *etubot) activeLoots() ([]Game, error) {
 			DefensePoint:    int(activeGameInfo.DefBattlePoint),
 			AttackPoint:     int(activeGameInfo.AtkBattlePoint),
 			AttackTeamID:    battleInfo.AttackTeamId.Int64(),
-			AttackTeamOwner: activeGameInfo.AttackTeamId.String(),
+			AttackTeamOwner: activeGameInfo.AtkOwner.String(),
 			BattleInfo:      (*BattleInfo)(&battleInfo),
 		}
 
@@ -95,7 +95,7 @@ func (et *etubot) allTeams() ([]*Team, error) {
 	teamInfos, err := et.crabCaller.GetTeamInfos(callOpts, []*big.Int{big.NewInt(2411),
 		big.NewInt(2290), big.NewInt(2279), big.NewInt(2463), big.NewInt(2462), big.NewInt(2461), big.NewInt(4609), big.NewInt(4608), big.NewInt(4607)})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error fetching team infos: %v", err)
 	}
 	for i, id := range teamIDs {
 		status := "LOCK"
@@ -162,7 +162,7 @@ func (et *etubot) findMyLootTeam(gameID int64) (*Team, error) {
 	return &Team{
 		ID:       myTeamInfo.AttackTeamId.Int64(),
 		Strength: int(myTeamInfo.BattlePoint),
-		Wallet:   myTeamInfo.AttackTeamId.String()}, nil
+		Wallet:   myTeamInfo.TeamOwner.String()}, nil
 }
 
 func (et *etubot) settleAll(isAuto bool) {
@@ -330,6 +330,14 @@ func (et *etubot) pollGamesAndAttack(team *Team) {
 
 	for {
 		log.Info("Reading to contract channel")
+		callOpts := &bind.CallOpts{Context: context.Background()}
+
+		txAuth, err := et.txAuth(team.Wallet, true)
+		if err != nil {
+			log.Error(err)
+			continue
+		}
+
 		var startGameEvent *idlegame.IdlegameStartGame
 		select {
 		case event := <-channel:
@@ -339,9 +347,6 @@ func (et *etubot) pollGamesAndAttack(team *Team) {
 			continue
 		}
 
-		startTime := time.Now()
-		callOpts := &bind.CallOpts{Context: context.Background()}
-
 		gameInfo, err := et.crabCaller.GetGameDefTeamInfo(callOpts, startGameEvent.GameId)
 		if err != nil {
 			et.sendError(fmt.Errorf("error getting game info: %v", err))
@@ -350,11 +355,11 @@ func (et *etubot) pollGamesAndAttack(team *Team) {
 
 		gameAge := time.Since(time.Unix(int64(gameInfo.StartTime), 0))
 		strengthDiff := team.Strength - int(gameInfo.BattlePoint)
-		if strengthDiff >= 20 && gameAge < (3*time.Second) {
-			targetGame := &Game{ID: startGameEvent.GameId.Int64(), DefensePoint: int(gameInfo.BattlePoint), StartTime: int64(gameInfo.StartTime)}
-			go log.Infof("Game: %d, opponent strength: %d, team strength: %d, start time:%s", targetGame.ID, targetGame.DefensePoint, team.Strength, time.Since(time.Unix(targetGame.StartTime, 0)).Truncate(time.Second))
+		if strengthDiff >= 10 && gameAge < (3*time.Second) {
+			targetGame := &Game{ID: startGameEvent.GameId.Int64(), DefensePoint: int(gameInfo.BattlePoint)}
+			go log.Infof("Game: %d, opponent strength: %d, team strength: %d, start time:%s", targetGame.ID, targetGame.DefensePoint, team.Strength, gameAge.Truncate(time.Second))
 
-			err = et.attack(targetGame, team, startTime)
+			err = et.attack(txAuth, targetGame, team)
 			if err != nil {
 				errorCount++
 				if errorCount >= 3 {
@@ -374,16 +379,11 @@ func (et *etubot) pollGamesAndAttack(team *Team) {
 	}
 }
 
-func (et *etubot) attack(game *Game, team *Team, startTime time.Time) error {
+func (et *etubot) attack(auth *bind.TransactOpts, game *Game, team *Team) error {
 
 	strengthDiff := team.Strength - game.DefensePoint
 	go log.Infof("Attacking %d using %d, strength advantage: %d.", game.ID, team.ID, strengthDiff)
-	auth, err := et.txAuth(team.Wallet, true)
-	if err != nil {
-		return err
-	}
 
-	log.Info("Attacking after %s", time.Since(startTime))
 	tx, err := et.idleContract.Attack(auth, big.NewInt(game.ID), big.NewInt(team.ID))
 	if err != nil {
 		return err

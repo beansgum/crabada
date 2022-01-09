@@ -212,7 +212,7 @@ func (et *etubot) start() {
 	// go et.queAttacks()
 	err = et.addActiveGames()
 	if err != nil {
-		log.Error(err)
+		log.Error("error adding active games:", err)
 		return
 	}
 	if et.isAuto {
@@ -248,7 +248,7 @@ func (et *etubot) connect() error {
 		return err
 	}
 
-	crabCallerAddress := common.HexToAddress("0x7cb4954b7c1d8830c6eb95973f0181ff741b92b3")
+	crabCallerAddress := common.HexToAddress("0xCe2139165a38BFD2D867B16D6cc1aB2a6171191a")
 	crabCaller, err := crabcaller.NewCrabcaller(crabCallerAddress, client)
 	if err != nil {
 		return err
@@ -276,7 +276,7 @@ func (et *etubot) txAuth(address string, addGas bool) (*bind.TransactOpts, error
 	auth.GasLimit = uint64(200000) // in units
 	et.gasMu.RLock()
 	if addGas {
-		auth.GasPrice = big.NewInt(0).Add(et.gasPrice, big.NewInt(80000000000)) //add 80 gwei
+		auth.GasPrice = big.NewInt(0).Add(et.gasPrice, big.NewInt(120000000000)) //add 100 gwei
 	} else {
 		auth.GasPrice = et.gasPrice
 	}
