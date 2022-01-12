@@ -271,20 +271,28 @@ func (et *etubot) txAuth(address string, addGas bool) (*bind.TransactOpts, error
 	}
 
 	limit := big.NewInt(210000000000) //210gwei
+	raidGasLimit := big.NewInt(100000000000)
 
 	auth.Value = big.NewInt(0)     // in wei
 	auth.GasLimit = uint64(200000) // in units
 	et.gasMu.RLock()
+
+	if et.gasPrice.Cmp(limit) >= 0 {
+		return nil, fmt.Errorf("cannot make tx, gas too high")
+	}
+
 	if addGas {
-		auth.GasPrice = big.NewInt(0).Add(et.gasPrice, big.NewInt(120000000000)) //add 100 gwei
+		auth.GasTipCap = big.NewInt(120000000000)
+		auth.GasFeeCap = auth.GasTipCap
+
+		if et.gasPrice.Cmp(raidGasLimit) >= 0 {
+			return nil, fmt.Errorf("cannot make tx, raid gas too high")
+		}
+
 	} else {
 		auth.GasPrice = et.gasPrice
 	}
 	et.gasMu.RUnlock()
-
-	if auth.GasPrice.Cmp(limit) >= 0 {
-		return nil, fmt.Errorf("cannot make tx, gas too high")
-	}
 
 	return auth, nil
 }

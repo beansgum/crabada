@@ -81,7 +81,7 @@ func (et *etubot) crabIsAvailable(crabID int64) bool {
 		return false
 	}
 
-	// log.Infof("Crab %d, lockto: %d, status: %d", crabID, crab.LockTo.Int64(), crab.Status.Int64())
+	log.Infof("Crab %d, lockto: %d, time since locked: %s status: %d", crabID, crab.LockTo.Int64(), time.Since(time.Unix(crab.LockTo.Int64(), 0)), crab.Status.Int64())
 	return time.Since(time.Unix(crab.LockTo.Int64(), 0)) > 0 && crab.Status.Int64() == 0
 }
 
@@ -242,12 +242,19 @@ func (et *etubot) reinforceAttacks() {
 	for _, game := range games {
 		if game.needsReinforcement() {
 
+			log.Info("Game needs reinforcement:", game.ID)
+
 			attackTeam := strings.ToLower(game.AttackTeamOwner)
 			attackTeamCrabs := reinforcementCrabs[attackTeam]
 
 			strengthNeeded, err := game.requiredReinforceStrength(et)
 			if err != nil {
 				log.Info("Error getting strength needed")
+				continue
+			}
+
+			if strengthNeeded <= 0 {
+				log.Info("Game got invalid needed strength:", game.ID, strengthNeeded)
 				continue
 			}
 
