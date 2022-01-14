@@ -354,6 +354,11 @@ func (et *etubot) pollGamesAndAttack(team *Team) {
 			continue
 		}
 
+		if !strings.EqualFold(startGameEvent.Raw.Address.String(), IdleContractAddress) {
+			log.Info("Ignoring game non crabda contract:", startGameEvent.Raw.Address.String())
+			continue
+		}
+
 		gameInfo, err := et.crabCaller.GetGameDefTeamInfo(callOpts, startGameEvent.GameId)
 		if err != nil {
 			et.sendError(fmt.Errorf("error getting game info: %v", err))

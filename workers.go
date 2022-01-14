@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"strings"
 	"time"
 
 	"github.com/c-ollins/crabada/idlegame"
@@ -21,39 +22,72 @@ func (et *etubot) gasUpdate() {
 	}
 }
 
-func (et *etubot) watchStartGame() {
-	watchOpts := &bind.WatchOpts{Context: context.Background(), Start: nil}
-	channel := make(chan *idlegame.IdlegameStartGame)
+func (et *etubot) watchRaidGas() {
 
-	log.Info("Subscribing to contract")
-	sub, err := et.idleContract.WatchStartGame(watchOpts, channel)
+	watchOpts := &bind.WatchOpts{Context: context.Background(), Start: nil}
+	channel := make(chan *idlegame.IdlegameFight)
+
+	sub, err := et.idleContract.WatchFight(watchOpts, channel)
 	if err != nil {
-		et.sendError(fmt.Errorf("error watching start game: %v", err))
+		et.sendError(fmt.Errorf("error watching fights: %v", err))
 		return
 	}
-	defer log.Info("unsub")
+
 	defer sub.Unsubscribe()
 
-	log.Info("Watch start game")
+	log.Info("Watching raid gas")
+	var lastHighestFee = big.NewInt(0)
 	for {
-		log.Info("Reading event")
 		event := <-channel
-		log.Infof("New game id: %d, team id: %d", event.GameId, event.TeamId)
-		gameInfo, err := et.idleContract.GetGameBasicInfo(&bind.CallOpts{Context: context.Background()}, event.GameId)
+		if event.Turn.Int64() != 0 {
+			continue
+		}
+		tx, _, err := et.client.TransactionByHash(context.Background(), event.Raw.TxHash)
 		if err != nil {
-			et.sendError(fmt.Errorf("error getting game info: %v", err))
-			return
+			log.Errorf("error getting fight event tx: %v", err)
+			continue
 		}
 
-		teamInfo, err := et.idleContract.GetTeamInfo(&bind.CallOpts{Context: context.Background()}, event.TeamId)
-		if err != nil {
-			et.sendError(fmt.Errorf("error getting game info: %v", err))
-			return
+		if tx.GasTipCap().Int64() <= 0 {
+			continue
 		}
 
-		gameAge := time.Since(time.Unix(int64(gameInfo.StartTime), 0)).Truncate(time.Second)
+		if !strings.EqualFold(tx.To().String(), IdleContractAddress) {
+			log.Info("Ignoring non crabda contract:", tx.To())
+			continue
+		}
 
-		log.Info("Game:", event.GameId, "Strength:", teamInfo.BattlePoint, "Start:", gameAge)
+		receipt, err := et.client.TransactionReceipt(context.Background(), event.Raw.TxHash)
+		if err != nil {
+			log.Errorf("error getting fight event receipt: %v", err)
+			continue
+		}
+
+		header, err := et.client.HeaderByHash(context.Background(), receipt.BlockHash)
+		if err != nil {
+			log.Errorf("error getting fight block header: %v", err)
+			continue
+		}
+
+		gasPrice := big.NewInt(0).Add(header.BaseFee, tx.GasTipCap())
+		if gasPrice.Cmp(tx.GasFeeCap()) == 1 {
+			gasPrice = tx.GasFeeCap()
+		}
+
+		if gasPrice.Cmp(lastHighestFee) == 1 {
+			lastHighestFee = gasPrice
+		}
+
+		if time.Since(et.raidLastUpdate) > 60*time.Second {
+			et.raidGasMu.Lock()
+			et.raidGasPrice = lastHighestFee
+			et.raidGasMu.Unlock()
+			et.raidLastUpdate = time.Now()
+			log.Info("Raid gas now:", ToGwei(lastHighestFee))
+			lastHighestFee = big.NewInt(0)
+
+		}
+
 	}
 }
 
@@ -65,11 +99,9 @@ func (et *etubot) auto() {
 
 		et.gasMu.RLock()
 		gasPrice := et.gasPrice
-		raidGas := big.NewInt(0).Add(et.gasPrice, big.NewInt(120000000000))
 		et.gasMu.RUnlock()
-		limit := big.NewInt(210000000000) //200gwei
 
-		if gasPrice.Cmp(limit) >= 0 {
+		if gasPrice.Cmp(GasLimit) >= 0 {
 			// notify high gas
 			// continue
 		} else {
@@ -77,7 +109,11 @@ func (et *etubot) auto() {
 			et.reinforceAttacks()
 		}
 
-		if !(raidGas.Cmp(limit) >= 0) {
+		et.raidGasMu.RLock()
+		raidGas := big.NewInt(0).Add(et.raidGasPrice, RaidGasExtra)
+		et.raidGasMu.RUnlock()
+
+		if !(raidGas.Cmp(RaidGasLimit) >= 0) {
 			et.raid()
 		}
 

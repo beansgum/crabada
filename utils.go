@@ -27,6 +27,10 @@ func ToDecimal(ivalue interface{}) decimal.Decimal {
 	return result
 }
 
+func ToGwei(value *big.Int) *big.Int {
+	return big.NewInt(0).Div(value, big.NewInt(1e9))
+}
+
 // ToWei decimals to wei
 func ToWei(iamount interface{}) *big.Int {
 	amount := decimal.NewFromFloat(0)

@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"math/big"
 	"strings"
 	"time"
 
@@ -15,7 +14,16 @@ func (et *etubot) gas(msg *tb.Message) {
 	gasPrice := et.gasPrice
 	et.gasMu.RUnlock()
 
-	et.bot.Reply(msg, fmt.Sprintf("%d gwei", big.NewInt(0).Div(gasPrice, big.NewInt(1e9))))
+	et.bot.Reply(msg, fmt.Sprintf("%d gwei", ToGwei(gasPrice)))
+}
+
+func (et *etubot) raidGas(msg *tb.Message) {
+
+	et.raidGasMu.RLock()
+	gasPrice := et.raidGasPrice
+	et.raidGasMu.RUnlock()
+
+	et.bot.Reply(msg, fmt.Sprintf("%d gwei", ToGwei(gasPrice)))
 }
 
 func (et *etubot) sendTeams(msg *tb.Message) {

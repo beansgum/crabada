@@ -41,6 +41,10 @@ var (
 	processIntervals = 30 * time.Minute
 
 	reinforcementCrabs = make(map[string][]int64)
+
+	RaidGasLimit = big.NewInt(300000000000)
+	RaidGasExtra = big.NewInt(20000000000)
+	GasLimit     = big.NewInt(210000000000)
 )
 
 func main() {
@@ -48,10 +52,11 @@ func main() {
 	reinforcementCrabs["0xf91ff01b9ef0d83d0bbd89953d53504f099a3dff"] = []int64{8874, 8870, 8871, 8875, 8363, 8881}
 	reinforcementCrabs["0x303de8234c60c146902f3e6f340722e41595667b"] = []int64{9390, 9637, 9393, 9387, 2584}
 	et := etubot{
-		isAuto:     true,
-		attackCh:   make(chan *Team, 5),
-		privateKey: make(map[string]*ecdsa.PrivateKey),
-		games:      make(map[int64]int),
+		isAuto:       true,
+		raidGasPrice: big.NewInt(210000000000),
+		attackCh:     make(chan *Team, 5),
+		privateKey:   make(map[string]*ecdsa.PrivateKey),
+		games:        make(map[int64]int),
 	}
 	et.start()
 }
@@ -62,6 +67,10 @@ type etubot struct {
 
 	gasPrice *big.Int
 	gasMu    sync.RWMutex
+
+	raidGasPrice   *big.Int
+	raidGasMu      sync.RWMutex
+	raidLastUpdate time.Time
 
 	attackCh chan *Team
 
@@ -125,6 +134,9 @@ func (et *etubot) start() {
 			return
 		case m.Text == "/gas":
 			go et.gas(m)
+			return
+		case m.Text == "/raidgas":
+			go et.raidGas(m)
 			return
 		case m.Text == "/raid":
 			if et.isAuto {
@@ -219,6 +231,7 @@ func (et *etubot) start() {
 		go et.auto()
 	}
 	go et.gasUpdate()
+	go et.watchRaidGas()
 	b.Start()
 
 	select {}
@@ -264,35 +277,34 @@ func (et *etubot) sendError(err error) {
 	// et.bot.Send(TelegramChat, err.Error())
 }
 
-func (et *etubot) txAuth(address string, addGas bool) (*bind.TransactOpts, error) {
+func (et *etubot) txAuth(address string, raidGas bool) (*bind.TransactOpts, error) {
 	auth, err := bind.NewKeyedTransactorWithChainID(et.privateKey[strings.ToLower(address)], big.NewInt(43114))
 	if err != nil {
 		return nil, fmt.Errorf("error creating transactor: %v", err)
 	}
 
-	limit := big.NewInt(210000000000) //210gwei
-	raidGasLimit := big.NewInt(100000000000)
-
 	auth.Value = big.NewInt(0)     // in wei
 	auth.GasLimit = uint64(200000) // in units
 	et.gasMu.RLock()
 
-	if et.gasPrice.Cmp(limit) >= 0 {
+	if et.gasPrice.Cmp(GasLimit) >= 0 {
 		return nil, fmt.Errorf("cannot make tx, gas too high")
 	}
-
-	if addGas {
-		auth.GasTipCap = big.NewInt(120000000000)
-		auth.GasFeeCap = auth.GasTipCap
-
-		if et.gasPrice.Cmp(raidGasLimit) >= 0 {
-			return nil, fmt.Errorf("cannot make tx, raid gas too high")
-		}
-
-	} else {
-		auth.GasPrice = et.gasPrice
-	}
+	auth.GasPrice = et.gasPrice
 	et.gasMu.RUnlock()
+
+	if raidGas {
+
+		et.raidGasMu.RLock()
+		auth.GasTipCap = big.NewInt(0).Add(et.raidGasPrice, RaidGasExtra)
+		auth.GasFeeCap = auth.GasTipCap
+		auth.GasPrice = nil
+		et.raidGasMu.RUnlock()
+
+		if auth.GasTipCap.Cmp(RaidGasLimit) >= 0 {
+			return nil, fmt.Errorf("cannot make tx, raid gas too high: %v gwei", ToGwei(auth.GasTipCap))
+		}
+	}
 
 	return auth, nil
 }
