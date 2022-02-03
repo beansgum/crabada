@@ -42,8 +42,8 @@ var (
 
 	reinforcementCrabs = make(map[string][]int64)
 
-	RaidGasLimit = big.NewInt(300000000000)
-	RaidGasExtra = big.NewInt(20000000000)
+	RaidGasLimit = big.NewInt(400000000000)
+	RaidGasExtra = big.NewInt(30000000000)
 	GasLimit     = big.NewInt(210000000000)
 )
 
@@ -52,18 +52,20 @@ func main() {
 	reinforcementCrabs["0xf91ff01b9ef0d83d0bbd89953d53504f099a3dff"] = []int64{8874, 8870, 8871, 8875, 8363, 8881}
 	reinforcementCrabs["0x303de8234c60c146902f3e6f340722e41595667b"] = []int64{9390, 9637, 9393, 9387, 2584}
 	et := etubot{
-		isAuto:       true,
-		raidGasPrice: big.NewInt(210000000000),
-		attackCh:     make(chan *Team, 5),
-		privateKey:   make(map[string]*ecdsa.PrivateKey),
-		games:        make(map[int64]int),
+		isAuto:        true,
+		lootingActive: true,
+		raidGasPrice:  big.NewInt(210000000000),
+		attackCh:      make(chan *Team, 5),
+		privateKey:    make(map[string]*ecdsa.PrivateKey),
+		games:         make(map[int64]int),
 	}
 	et.start()
 }
 
 type etubot struct {
-	bot    *tb.Bot
-	isAuto bool
+	bot           *tb.Bot
+	isAuto        bool
+	lootingActive bool
 
 	gasPrice *big.Int
 	gasMu    sync.RWMutex
@@ -147,6 +149,14 @@ func (et *etubot) start() {
 			return
 		case m.Text == "/loots":
 			go et.sendActiveLoots(m)
+			return
+		case m.Text == "/pauseattacks":
+			et.lootingActive = false
+			et.bot.Send(TelegramChat, "looting paused")
+			return
+		case m.Text == "/startattacks":
+			et.lootingActive = true
+			et.bot.Send(TelegramChat, "looting active")
 			return
 		case m.Text == "/reinforce":
 			go et.reinforceAttacks()
@@ -247,10 +257,13 @@ func (et *etubot) reconnect() {
 
 func (et *etubot) connect() error {
 	log.Info("Connecting to infura")
-	client, err := ethclient.Dial("wss://speedy-nodes-nyc.moralis.io//avalanche/mainnet/ws")
+	//ws://127.0.0.1:9650/ext/bc/C/ws
+	//wss://speedy-nodes-nyc.moralis.io//avalanche/mainnet/ws
+	client, err := ethclient.Dial("ws://127.0.0.1:9650/ext/bc/C/ws")
 	if err != nil {
 		return err
 	}
+
 	et.client = client
 
 	log.Info("Connected to infura")
@@ -288,6 +301,7 @@ func (et *etubot) txAuth(address string, raidGas bool) (*bind.TransactOpts, erro
 	et.gasMu.RLock()
 
 	if et.gasPrice.Cmp(GasLimit) >= 0 {
+		et.gasMu.RUnlock()
 		return nil, fmt.Errorf("cannot make tx, gas too high")
 	}
 	auth.GasPrice = et.gasPrice

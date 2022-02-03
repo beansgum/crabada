@@ -322,6 +322,7 @@ func (et *etubot) raid() {
 
 func (et *etubot) pollGamesAndAttack(team *Team) {
 	errorCount := 0
+	timeoutCount := 0
 	et.bot.Send(TelegramChat, fmt.Sprintf("Finding game using team #%d", team.ID))
 
 	watchOpts := &bind.WatchOpts{Context: context.Background(), Start: nil}
@@ -342,6 +343,11 @@ func (et *etubot) pollGamesAndAttack(team *Team) {
 		txAuth, err := et.txAuth(team.Wallet, true)
 		if err != nil {
 			log.Error(err)
+			errorCount++
+			if errorCount >= 2 {
+				et.bot.Send(TelegramChat, fmt.Sprintf("2 errors while trying to attack using team %d. %v", team.ID, err))
+				return
+			}
 			continue
 		}
 
@@ -351,6 +357,13 @@ func (et *etubot) pollGamesAndAttack(team *Team) {
 			startGameEvent = event
 		case <-time.After(2 * time.Minute):
 			log.Info("Timeout reading from channel")
+			timeoutCount++
+			if timeoutCount >= 5 {
+				log.Info("%d consecutive timeout, reconnect api")
+				et.bot.Send(TelegramChat, fmt.Sprintf("%d consecutive timeout, reconnect api", timeoutCount))
+				et.reconnect()
+				return
+			}
 			continue
 		}
 
@@ -374,8 +387,8 @@ func (et *etubot) pollGamesAndAttack(team *Team) {
 			err = et.attack(txAuth, targetGame, team)
 			if err != nil {
 				errorCount++
-				if errorCount >= 3 {
-					et.bot.Send(TelegramChat, fmt.Sprintf("More than 3 errors while trying to attack using team %d. %v", team.ID, err))
+				if errorCount >= 2 {
+					et.bot.Send(TelegramChat, fmt.Sprintf("2 errors while trying to attack using team %d. %v", team.ID, err))
 					return
 				}
 

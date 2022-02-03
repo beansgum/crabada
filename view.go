@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math/big"
 	"strings"
 	"time"
 
@@ -20,7 +21,7 @@ func (et *etubot) gas(msg *tb.Message) {
 func (et *etubot) raidGas(msg *tb.Message) {
 
 	et.raidGasMu.RLock()
-	gasPrice := et.raidGasPrice
+	gasPrice := big.NewInt(0).Add(et.raidGasPrice, RaidGasExtra)
 	et.raidGasMu.RUnlock()
 
 	et.bot.Reply(msg, fmt.Sprintf("%d gwei", ToGwei(gasPrice)))

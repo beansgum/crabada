@@ -78,15 +78,14 @@ func (et *etubot) watchRaidGas() {
 			lastHighestFee = gasPrice
 		}
 
-		if time.Since(et.raidLastUpdate) > 60*time.Second {
-			et.raidGasMu.Lock()
+		et.raidGasMu.Lock()
+		if time.Since(et.raidLastUpdate) > 60*time.Second || et.raidGasPrice.Cmp(lastHighestFee) == -1 {
 			et.raidGasPrice = lastHighestFee
-			et.raidGasMu.Unlock()
 			et.raidLastUpdate = time.Now()
 			log.Info("Raid gas now:", ToGwei(lastHighestFee))
 			lastHighestFee = big.NewInt(0)
-
 		}
+		et.raidGasMu.Unlock()
 
 	}
 }
@@ -102,6 +101,7 @@ func (et *etubot) auto() {
 		et.gasMu.RUnlock()
 
 		if gasPrice.Cmp(GasLimit) >= 0 {
+			log.Info("Gas is too high")
 			// notify high gas
 			// continue
 		} else {
@@ -113,7 +113,7 @@ func (et *etubot) auto() {
 		raidGas := big.NewInt(0).Add(et.raidGasPrice, RaidGasExtra)
 		et.raidGasMu.RUnlock()
 
-		if !(raidGas.Cmp(RaidGasLimit) >= 0) {
+		if !(raidGas.Cmp(RaidGasLimit) >= 0) && et.lootingActive {
 			et.raid()
 		}
 
