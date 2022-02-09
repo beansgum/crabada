@@ -284,8 +284,31 @@ func (et *etubot) reinforceAttacks() {
 					return
 				}
 
-				txt := fmt.Sprintf("Game #%d reinforced with strength 220, battle points: %d vs %d.\nhttps://snowtrace.io/tx/%s", game.ID, 220+game.AttackPoint, game.DefensePoint, tx.Hash())
-				et.bot.Send(TelegramChat, txt, MsgSendOptions)
+				waitStart := time.Now()
+				for {
+					receipt, err := et.client.TransactionReceipt(context.Background(), tx.Hash())
+					if err != nil {
+						if err != ethereum.NotFound {
+							log.Error("error:", err)
+						}
+						time.Sleep(5 * time.Second)
+						if time.Since(waitStart) > 2*time.Minute {
+							log.Errorf("transaction failed when reinforcing game: %d, did not get receipt after 2 minutes", game.ID)
+							return
+						}
+						continue
+					}
+
+					if receipt.Status == types.ReceiptStatusSuccessful {
+						txt := fmt.Sprintf("Game #%d reinforced with strength 220, battle points: %d vs %d.\nhttps://snowtrace.io/tx/%s", game.ID, 220+game.AttackPoint, game.DefensePoint, tx.Hash())
+						et.bot.Send(TelegramChat, txt, MsgSendOptions)
+					} else {
+						log.Info("reinforce failed failed, retrying")
+					}
+
+					break
+				}
+
 				break
 			}
 		}
@@ -384,7 +407,18 @@ func (et *etubot) pollGamesAndAttack(team *Team) {
 			targetGame := &Game{ID: startGameEvent.GameId.Int64(), DefensePoint: int(gameInfo.BattlePoint)}
 			go log.Infof("Game: %d, opponent strength: %d, team strength: %d, start time:%s", targetGame.ID, targetGame.DefensePoint, team.Strength, gameAge.Truncate(time.Second))
 
-			err = et.attack(txAuth, targetGame, team)
+			battleInfo, err := et.idleContract.GetGameBattleInfo(callOpts, big.NewInt(targetGame.ID))
+			if err != nil {
+				log.Errorf("error getting defense team info 2: %v", err)
+				continue
+			}
+
+			if battleInfo.AttackTeamId.Int64() != 0 {
+				log.Error("error game looted:", targetGame.ID)
+				continue
+			}
+
+			err = et.attack(txAuth, targetGame, team, strengthDiff)
 			if err != nil {
 				errorCount++
 				if errorCount >= 2 {
@@ -400,13 +434,14 @@ func (et *etubot) pollGamesAndAttack(team *Team) {
 			et.games[targetGame.ID] = 1
 			et.gamesMu.Unlock()
 			break
+		} else {
+			// log.Infof("Cant attack, strenght diff %d, age %s", strengthDiff, gameAge)
 		}
 	}
 }
 
-func (et *etubot) attack(auth *bind.TransactOpts, game *Game, team *Team) error {
+func (et *etubot) attack(auth *bind.TransactOpts, game *Game, team *Team, strengthDiff int) error {
 
-	strengthDiff := team.Strength - game.DefensePoint
 	go log.Infof("Attacking %d using %d, strength advantage: %d.", game.ID, team.ID, strengthDiff)
 
 	tx, err := et.idleContract.Attack(auth, big.NewInt(game.ID), big.NewInt(team.ID))

@@ -74,6 +74,10 @@ func (et *etubot) watchRaidGas() {
 			gasPrice = tx.GasFeeCap()
 		}
 
+		if gasPrice.Cmp(RaidGasMin) == -1 {
+			continue
+		}
+
 		if gasPrice.Cmp(lastHighestFee) == 1 {
 			lastHighestFee = gasPrice
 		}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"fmt"
 	"math/big"
@@ -43,6 +44,7 @@ var (
 	reinforcementCrabs = make(map[string][]int64)
 
 	RaidGasLimit = big.NewInt(400000000000)
+	RaidGasMin   = big.NewInt(300000000000)
 	RaidGasExtra = big.NewInt(30000000000)
 	GasLimit     = big.NewInt(210000000000)
 )
@@ -54,7 +56,7 @@ func main() {
 	et := etubot{
 		isAuto:        true,
 		lootingActive: true,
-		raidGasPrice:  big.NewInt(210000000000),
+		raidGasPrice:  RaidGasMin,
 		attackCh:      make(chan *Team, 5),
 		privateKey:    make(map[string]*ecdsa.PrivateKey),
 		games:         make(map[int64]int),
@@ -264,6 +266,8 @@ func (et *etubot) connect() error {
 		return err
 	}
 
+	log.Info("connected client")
+
 	et.client = client
 
 	log.Info("Connected to infura")
@@ -296,6 +300,12 @@ func (et *etubot) txAuth(address string, raidGas bool) (*bind.TransactOpts, erro
 		return nil, fmt.Errorf("error creating transactor: %v", err)
 	}
 
+	nonce, err := et.client.PendingNonceAt(context.Background(), common.HexToAddress(address))
+	if err != nil {
+		return nil, fmt.Errorf("error creating transactor: %v", err)
+	}
+
+	auth.Nonce = big.NewInt(int64(nonce))
 	auth.Value = big.NewInt(0)     // in wei
 	auth.GasLimit = uint64(200000) // in units
 	et.gasMu.RLock()
