@@ -94,6 +94,24 @@ func (et *etubot) watchRaidGas() {
 	}
 }
 
+func (et *etubot) topupFees() {
+	for addr := range et.privateKey {
+		sellTus, err := et.shouldSellTus(addr)
+		if err != nil {
+			log.Error("error querying balance:", err)
+			return
+		}
+
+		if sellTus {
+			err = et.sellTus(addr)
+			if err != nil {
+				log.Error("error selling tus:", err)
+				return
+			}
+		}
+	}
+}
+
 func (et *etubot) auto() {
 	et.bot.Send(TelegramChat, "Etubot running on auto.")
 	for {
@@ -109,6 +127,7 @@ func (et *etubot) auto() {
 			// notify high gas
 			// continue
 		} else {
+			et.topupFees()
 			et.settleAll(true)
 			et.reinforceAttacks()
 		}

@@ -14,8 +14,12 @@ import (
 
 	"github.com/c-ollins/crabada/crabcaller"
 	"github.com/c-ollins/crabada/idlegame"
+	"github.com/c-ollins/crabada/traderjoe"
+	"github.com/c-ollins/crabada/tus"
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
 	tb "gopkg.in/tucnak/telebot.v2"
@@ -43,16 +47,18 @@ var (
 
 	reinforcementCrabs = make(map[string][]int64)
 
-	RaidGasLimit = big.NewInt(400000000000)
+	RaidGasLimit = big.NewInt(600000000000)
 	RaidGasMin   = big.NewInt(300000000000)
-	RaidGasExtra = big.NewInt(30000000000)
-	GasLimit     = big.NewInt(210000000000)
+	RaidGasExtra = big.NewInt(70000000000)
+	GasLimit     = big.NewInt(310000000000)
+
+	MinBalance = ToWei(0.4)
 )
 
 func main() {
 	reinforcementCrabs["0xed3428bcc71d3b0a43bb50a64ed774bec57100a8"] = []int64{8872, 8869, 8876, 8873, 8976, 8877}
 	reinforcementCrabs["0xf91ff01b9ef0d83d0bbd89953d53504f099a3dff"] = []int64{8874, 8870, 8871, 8875, 8363, 8881}
-	reinforcementCrabs["0x303de8234c60c146902f3e6f340722e41595667b"] = []int64{9390, 9637, 9393, 9387, 2584}
+	reinforcementCrabs["0x303de8234c60c146902f3e6f340722e41595667b"] = []int64{9390, 9637, 9393, 9387, 2584, 11448}
 	et := etubot{
 		isAuto:        true,
 		lootingActive: true,
@@ -81,6 +87,8 @@ type etubot struct {
 	client       *ethclient.Client
 	idleContract *idlegame.Idlegame
 	crabCaller   *crabcaller.Crabcaller
+	traderJoe    *traderjoe.Traderjoe
+	tus          *tus.Tus
 	privateKey   map[string]*ecdsa.PrivateKey
 
 	games   map[int64]int
@@ -284,8 +292,22 @@ func (et *etubot) connect() error {
 		return err
 	}
 
+	traderJoeAddress := common.HexToAddress("0x60ae616a2155ee3d9a68541ba4544862310933d4")
+	traderJoe, err := traderjoe.NewTraderjoe(traderJoeAddress, client)
+	if err != nil {
+		return err
+	}
+
+	tusAddress := common.HexToAddress("0xf693248F96Fe03422FEa95aC0aFbBBc4a8FdD172")
+	tusToken, err := tus.NewTus(tusAddress, client)
+	if err != nil {
+		return err
+	}
+
 	et.crabCaller = crabCaller
 	et.idleContract = idleContract
+	et.traderJoe = traderJoe
+	et.tus = tusToken
 	return nil
 }
 
@@ -307,7 +329,7 @@ func (et *etubot) txAuth(address string, raidGas bool) (*bind.TransactOpts, erro
 
 	auth.Nonce = big.NewInt(int64(nonce))
 	auth.Value = big.NewInt(0)     // in wei
-	auth.GasLimit = uint64(200000) // in units
+	auth.GasLimit = uint64(300000) // in units
 	et.gasMu.RLock()
 
 	if et.gasPrice.Cmp(GasLimit) >= 0 {
@@ -347,5 +369,72 @@ func (et *etubot) updateGasPrice() error {
 	et.gasPrice = gasPrice
 	et.gasMu.Unlock()
 
+	return nil
+}
+
+func (et *etubot) shouldSellTus(address string) (bool, error) {
+	balance, err := et.client.BalanceAt(context.Background(), common.HexToAddress(address), nil)
+	if err != nil {
+		return false, err
+	}
+
+	if balance.Cmp(MinBalance) == 1 {
+		return false, nil
+	}
+
+	callOpts := &bind.CallOpts{Context: context.Background()}
+	tusBalance, err := et.tus.BalanceOf(callOpts, common.HexToAddress(address))
+	if err != nil {
+		return false, err
+	}
+
+	if tusBalance.Cmp(ToWei(int64(600))) == -1 {
+		return false, fmt.Errorf("cannot sell tus for %s, not enough tus balance", address)
+	}
+
+	return true, nil
+}
+
+func (et *etubot) sellTus(address string) error {
+	et.bot.Send(TelegramChat, fmt.Sprintf("Selling 500 $TUS for AVAX using account %s", address), MsgSendOptions)
+
+	opts, err := et.txAuth(address, false)
+	if err != nil {
+		return err
+	}
+
+	routerPath := []common.Address{
+		common.HexToAddress("0xf693248F96Fe03422FEa95aC0aFbBBc4a8FdD172"),
+		common.HexToAddress("0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7"),
+	}
+	deadline := time.Now().Add(4*time.Minute).UnixNano() / int64(time.Millisecond)
+	tx, err := et.traderJoe.SwapExactTokensForAVAX(opts, ToWei(int64(500)), ToWei(float64(0.5)), routerPath, common.HexToAddress(address), big.NewInt(deadline))
+	if err != nil {
+		return err
+	}
+
+	waitStart := time.Now()
+	for {
+		receipt, err := et.client.TransactionReceipt(context.Background(), tx.Hash())
+		if err != nil {
+			if err != ethereum.NotFound {
+				log.Error("error:", err)
+			}
+			time.Sleep(5 * time.Second)
+			if time.Since(waitStart) > 2*time.Minute {
+				return fmt.Errorf("transaction failed when selling tus, did not get receipt after 2 minutes")
+			}
+			continue
+		}
+
+		if receipt.Status == types.ReceiptStatusSuccessful {
+			txt := fmt.Sprintf("500 $TUS sold for AVAX.\nhttps://snowtrace.io/tx/%s", tx.Hash())
+			et.bot.Send(TelegramChat, txt, MsgSendOptions)
+		} else {
+			log.Info("sell tus failed, retrying")
+		}
+
+		break
+	}
 	return nil
 }
