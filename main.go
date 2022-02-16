@@ -56,9 +56,9 @@ var (
 )
 
 func main() {
-	reinforcementCrabs["0xed3428bcc71d3b0a43bb50a64ed774bec57100a8"] = []int64{8872, 8869, 8876, 8873, 8976, 8877}
-	reinforcementCrabs["0xf91ff01b9ef0d83d0bbd89953d53504f099a3dff"] = []int64{8874, 8870, 8871, 8875, 8363, 8881}
-	reinforcementCrabs["0x303de8234c60c146902f3e6f340722e41595667b"] = []int64{9390, 9637, 9393, 9387, 2584, 11448}
+	reinforcementCrabs["0xed3428bcc71d3b0a43bb50a64ed774bec57100a8"] = []int64{1123, 8976, 8877, 5196, 663, 624}
+	reinforcementCrabs["0xf91ff01b9ef0d83d0bbd89953d53504f099a3dff"] = []int64{8871, 8870, 8363, 8881, 4278, 7272}
+	reinforcementCrabs["0x303de8234c60c146902f3e6f340722e41595667b"] = []int64{9387, 9631, 9405, 9404, 9402, 2584}
 	et := etubot{
 		isAuto:        true,
 		lootingActive: true,
@@ -308,6 +308,7 @@ func (et *etubot) connect() error {
 	et.idleContract = idleContract
 	et.traderJoe = traderJoe
 	et.tus = tusToken
+
 	return nil
 }
 

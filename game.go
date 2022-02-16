@@ -269,6 +269,10 @@ func (et *etubot) reinforceAttacks() {
 
 				if strengthNeeded > 206 && crabID == 2584 {
 					continue
+				} else if strengthNeeded > 218 && crabID == 4278 {
+					continue
+				} else if strengthNeeded > 209 && crabID == 7272 {
+					continue
 				}
 
 				log.Infof("Reinforcing game #%d using crab #%d", game.ID, crabID)
