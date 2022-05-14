@@ -29,6 +29,7 @@ const (
 	IdleContractAddress = "0x82a85407BD612f52577909F4A58bfC6873f14DA8"
 
 	TelegramChatID = 0
+	TelegramToken  = ""
 
 	TeamAvailable = "AVAILABLE"
 
@@ -56,9 +57,7 @@ var (
 )
 
 func main() {
-	reinforcementCrabs["0xed3428bcc71d3b0a43bb50a64ed774bec57100a8"] = []int64{1123, 8976, 8877, 5196, 663, 624}
-	reinforcementCrabs["0xf91ff01b9ef0d83d0bbd89953d53504f099a3dff"] = []int64{8871, 8870, 8363, 8881, 4278, 7272}
-	reinforcementCrabs["0x303de8234c60c146902f3e6f340722e41595667b"] = []int64{9387, 9631, 9405, 9404, 9402, 2584}
+	reinforcementCrabs["ACCOUNT_ADDRESS"] = []int64{1, 2, 3, 4, 5, 6}
 	et := etubot{
 		isAuto:        true,
 		lootingActive: true,
@@ -99,35 +98,26 @@ func (et *etubot) start() {
 
 	initLogRotator("logs.txt")
 
-	privateKey, err := crypto.HexToECDSA(os.Getenv("BOT_PRIVATE"))
-	if err != nil {
-		log.Error(err)
-		return
-	}
-	et.privateKey["0xed3428bcc71d3b0a43bb50a64ed774bec57100a8"] = privateKey
+	accounts := []string{"0xf91ff01b9ef0d83d0bbd89953d53504f099a3dff"}
 
-	privateKey2, err := crypto.HexToECDSA(os.Getenv("BOT_PRIVATE2"))
-	if err != nil {
-		log.Error(err)
-		return
+	// retrieve private key from env vars using account address as key
+	for _, account := range accounts {
+		privateKey, err := crypto.HexToECDSA(os.Getenv(account))
+		if err != nil {
+			log.Error(err)
+			return
+		}
+		et.privateKey[account] = privateKey
 	}
-	et.privateKey["0xf91ff01b9ef0d83d0bbd89953d53504f099a3dff"] = privateKey2
 
-	privateKey3, err := crypto.HexToECDSA(os.Getenv("BOT_PRIVATE3"))
-	if err != nil {
-		log.Error(err)
-		return
-	}
-	et.privateKey["0x303de8234c60c146902f3e6f340722e41595667b"] = privateKey3
-
-	err = et.connect()
+	err := et.connect()
 	if err != nil {
 		log.Errorf("error connecting: %v", err)
 		return
 	}
 
 	b, err := tb.NewBot(tb.Settings{
-		Token:  "",
+		Token:  TelegramToken,
 		Poller: &tb.LongPoller{Timeout: 10 * time.Second},
 	})
 	if err != nil {
@@ -240,16 +230,16 @@ func (et *etubot) start() {
 		return
 	}
 
-	// go et.watchStartGame()
-	// go et.queAttacks()
 	err = et.addActiveGames()
 	if err != nil {
 		log.Error("error adding active games:", err)
 		return
 	}
+
 	if et.isAuto {
 		go et.auto()
 	}
+
 	go et.gasUpdate()
 	go et.watchRaidGas()
 	b.Start()
@@ -266,9 +256,7 @@ func (et *etubot) reconnect() {
 }
 
 func (et *etubot) connect() error {
-	log.Info("Connecting to infura")
-	//ws://127.0.0.1:9650/ext/bc/C/ws
-	//wss://speedy-nodes-nyc.moralis.io//avalanche/mainnet/ws
+	log.Info("Connecting eth client")
 	client, err := ethclient.Dial("ws://127.0.0.1:9650/ext/bc/C/ws")
 	if err != nil {
 		return err
@@ -278,7 +266,7 @@ func (et *etubot) connect() error {
 
 	et.client = client
 
-	log.Info("Connected to infura")
+	log.Info("Connected eth client")
 
 	crabadaAddress := common.HexToAddress(IdleContractAddress)
 	idleContract, err := idlegame.NewIdlegame(crabadaAddress, client)
@@ -337,6 +325,7 @@ func (et *etubot) txAuth(address string, raidGas bool) (*bind.TransactOpts, erro
 		et.gasMu.RUnlock()
 		return nil, fmt.Errorf("cannot make tx, gas too high")
 	}
+
 	auth.GasPrice = et.gasPrice
 	et.gasMu.RUnlock()
 

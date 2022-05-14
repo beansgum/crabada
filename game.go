@@ -87,13 +87,12 @@ func (et *etubot) crabIsAvailable(crabID int64) bool {
 
 func (et *etubot) allTeams() ([]*Team, error) {
 
-	teamIDs := []int64{2411, 2290, 2279, 2463, 2462, 2461, 4609, 4608, 4607}
+	teamIDs := []int64{1, 2, 3, 4} // hardcoded team ids
 	callOpts := &bind.CallOpts{Context: context.Background()}
 	var teams []*Team
-	startTime := time.Now()
 
-	teamInfos, err := et.crabCaller.GetTeamInfos(callOpts, []*big.Int{big.NewInt(2411),
-		big.NewInt(2290), big.NewInt(2279), big.NewInt(2463), big.NewInt(2462), big.NewInt(2461), big.NewInt(4609), big.NewInt(4608), big.NewInt(4607)})
+	teamInfos, err := et.crabCaller.GetTeamInfos(callOpts, []*big.Int{big.NewInt(1),
+		big.NewInt(2), big.NewInt(3), big.NewInt(4)}) // hardcoded team ids
 	if err != nil {
 		return nil, fmt.Errorf("error fetching team infos: %v", err)
 	}
@@ -113,8 +112,6 @@ func (et *etubot) allTeams() ([]*Team, error) {
 
 		teams = append(teams, team)
 	}
-
-	log.Info("Got teams in:", time.Since(startTime))
 
 	return teams, nil
 }
@@ -141,11 +138,7 @@ func (et *etubot) teamIsAvailable(teamID int64) bool {
 		return false
 	}
 
-	if team.Status == "AVAILABLE" {
-		return true
-	}
-
-	return false
+	return team.Status == "AVAILABLE"
 }
 
 func (et *etubot) findMyLootTeam(gameID int64) (*Team, error) {
@@ -217,7 +210,7 @@ func (et *etubot) settleGame(gameID int64) {
 				log.Error("error:", err)
 			}
 			if time.Since(waitStart) > 2*time.Minute {
-				et.bot.Send(TelegramChat, fmt.Sprintf("Game #%d Team #%d has been settled, but didnt not get confirmed in 1 minute.\nhttps://snowtrace.io/tx/%s", gameID, team.ID, tx.Hash().String()), MsgSendOptions)
+				et.bot.Send(TelegramChat, fmt.Sprintf("Game #%d Team #%d has been settled, but did not get confirmed in 1 minute.\nhttps://snowtrace.io/tx/%s", gameID, team.ID, tx.Hash().String()), MsgSendOptions)
 				return
 			}
 			time.Sleep(5 * time.Second)
@@ -258,7 +251,7 @@ func (et *etubot) reinforceAttacks() {
 				continue
 			}
 
-			if strengthNeeded > 220 {
+			if strengthNeeded > 220 { // hardcoded strength filtering
 				continue
 			}
 
@@ -267,6 +260,7 @@ func (et *etubot) reinforceAttacks() {
 					continue
 				}
 
+				// hardcoded strength filtering, sorry
 				if strengthNeeded > 206 && crabID == 2584 {
 					continue
 				} else if strengthNeeded > 218 && crabID == 4278 {
@@ -407,6 +401,7 @@ func (et *etubot) pollGamesAndAttack(team *Team) {
 
 		gameAge := time.Since(time.Unix(int64(gameInfo.StartTime), 0))
 		strengthDiff := team.Strength - int(gameInfo.BattlePoint)
+		// Only attempting attacks on < 3s old games with >10 strength advantage
 		if strengthDiff >= 10 && gameAge < (3*time.Second) {
 			targetGame := &Game{ID: startGameEvent.GameId.Int64(), DefensePoint: int(gameInfo.BattlePoint)}
 			go log.Infof("Game: %d, opponent strength: %d, team strength: %d, start time:%s", targetGame.ID, targetGame.DefensePoint, team.Strength, gameAge.Truncate(time.Second))

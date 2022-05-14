@@ -76,7 +76,7 @@ func (g Game) settleTime() time.Time {
 }
 
 func (g Game) isWonOrLost() bool {
-	// true if  the enemy did not reinforce or we did not reattack a reinforcement in time
+	// true if the enemy did not reinforce or we did not reattack a reinforcement in time
 	return time.Since(g.lastProcessTime()) > processIntervals || g.reinforceAttackCount() == 2
 }
 

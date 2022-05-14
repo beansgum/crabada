@@ -65,24 +65,24 @@ func CalcGasCost(gasLimit uint64, gasPrice *big.Int) *big.Int {
 func makeRequest(url string, result interface{}) error {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return fmt.Errorf("error fetching contract listings: %v", err)
+		return fmt.Errorf("%v", err)
 	}
 
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("error fetching contract listings: %v", err)
+		return fmt.Errorf("error fetching request: %v", err)
 	}
 
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
-		return fmt.Errorf("error reading contract listings: %v", err)
+		return fmt.Errorf("error reading body: %v", err)
 	}
 	res.Body.Close()
 
 	// fmt.Println(string(body))
 	json.Unmarshal(body, result)
 	if err != nil {
-		return fmt.Errorf("error unmarshalling contract listings: %v", err)
+		return fmt.Errorf("error unmarshalling: %v", err)
 	}
 
 	return nil
